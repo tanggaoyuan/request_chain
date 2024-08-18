@@ -38,7 +38,11 @@ class AxiosChain extends RequestChain<AxiosResponse> {
     return uploader;
   }
 
-  public download(params: { url: string; part_size?: number }) {
+  public download(params: {
+    url: string;
+    part_size?: number;
+    concurrent: number;
+  }) {
     const downloader = new Downloader({
       ...params,
       request: this.request.bind(this),

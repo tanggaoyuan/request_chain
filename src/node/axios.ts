@@ -42,6 +42,7 @@ class AxiosChain extends RequestChain<AxiosResponse<any>> {
     url: string;
     part_size?: number;
     dir_path: string;
+    concurrent: number;
   }) {
     const downloader = new Downloader({
       ...params,

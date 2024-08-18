@@ -23,6 +23,7 @@ declare class AxiosChain extends RequestChain<AxiosResponse> {
     download(params: {
         url: string;
         part_size?: number;
+        concurrent: number;
     }): Downloader;
 }
 export { Uploader, Downloader };

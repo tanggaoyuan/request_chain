@@ -24,6 +24,7 @@ declare class AxiosChain extends RequestChain<AxiosResponse<any>> {
         url: string;
         part_size?: number;
         dir_path: string;
+        concurrent: number;
     }): Downloader;
 }
 export { Uploader, Downloader };
