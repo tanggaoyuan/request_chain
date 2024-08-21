@@ -13,9 +13,9 @@ exports.Downloader = downloader_1.default;
 class AxiosChain extends core_1.default {
     constructor(config, interceptor) {
         super(Object.assign(Object.assign({}, config), { request: (params) => {
-                return axios_1.default.request(Object.assign(params, config.agent
-                    ? { httpAgent: config.agent, httpsAgent: config.agent }
-                    : {}));
+                const agent = params.agent;
+                delete params.agent;
+                return axios_1.default.request(Object.assign(params, agent ? { httpAgent: agent, httpsAgent: agent } : {}));
             } }), interceptor);
     }
     upload(parmas) {

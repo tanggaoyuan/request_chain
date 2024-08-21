@@ -1,5 +1,5 @@
 import axios, { AxiosResponse } from "axios";
-import RequestChain, { RequestChainResponse } from "../core";
+import RequestChain from "../core";
 import Uploader, { UploaderParts } from "./uploader";
 import Downloader from "./downloader";
 

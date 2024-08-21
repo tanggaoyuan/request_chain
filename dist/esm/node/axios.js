@@ -5,9 +5,9 @@ import Downloader from "./downloader";
 class AxiosChain extends RequestChain {
     constructor(config, interceptor) {
         super(Object.assign(Object.assign({}, config), { request: (params) => {
-                return axios.request(Object.assign(params, config.agent
-                    ? { httpAgent: config.agent, httpsAgent: config.agent }
-                    : {}));
+                const agent = params.agent;
+                delete params.agent;
+                return axios.request(Object.assign(params, agent ? { httpAgent: agent, httpsAgent: agent } : {}));
             } }), interceptor);
     }
     upload(parmas) {

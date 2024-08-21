@@ -103,6 +103,7 @@ declare namespace RequestChain {
         alert?: boolean;
         timeout?: number;
         responseType?: "arraybuffer" | "blob" | "text" | "stream" | "json";
+        agent?: any;
         onUploadProgress?: (value: {
             progress?: number;
             loaded?: number;
