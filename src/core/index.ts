@@ -527,6 +527,7 @@ namespace RequestChain {
     alert?: boolean;
     timeout?: number; // 毫秒
     responseType?: "arraybuffer" | "blob" | "text" | "stream" | "json";
+    agent?: any;
     onUploadProgress?: (value: {
       progress?: number;
       loaded?: number;

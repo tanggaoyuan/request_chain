@@ -1,5 +1,5 @@
 import axios, { AxiosResponse } from "axios";
-import RequestChain from "../core";
+import RequestChain, { RequestChainResponse } from "../core";
 import Uploader, { UploaderParts } from "./uploader";
 import Downloader from "./downloader";
 
@@ -12,12 +12,12 @@ class AxiosChain extends RequestChain<AxiosResponse<any>> {
       {
         ...config,
         request: (params) => {
+          const agent = params.agent;
+          delete params.agent;
           return axios.request(
             Object.assign(
               params,
-              config.agent
-                ? { httpAgent: config.agent, httpsAgent: config.agent }
-                : {}
+              agent ? { httpAgent: agent, httpsAgent: agent } : {}
             )
           );
         },
