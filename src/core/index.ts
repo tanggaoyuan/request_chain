@@ -340,7 +340,7 @@ export class RequestChainResponse<
 
   [Symbol.toStringTag] = "RequestChainResponse";
 
-  getData() {
+  getData(): Promise<T> {
     return this.promise.then((item) => item.data);
   }
 }

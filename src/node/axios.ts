@@ -5,13 +5,22 @@ import Downloader from "./downloader";
 
 class AxiosChain extends RequestChain<AxiosResponse<any>> {
   constructor(
-    config: Omit<RequestChain.BaseConfig, "request">,
+    config: Omit<RequestChain.BaseConfig, "request"> & { agent?: any },
     interceptor?: RequestChain.Interceptor<AxiosResponse<any>>
   ) {
     super(
       {
         ...config,
-        request: axios.request,
+        request: (params) => {
+          return axios.request(
+            Object.assign(
+              params,
+              config.agent
+                ? { httpAgent: config.agent, httpsAgent: config.agent }
+                : {}
+            )
+          );
+        },
       },
       interceptor
     );
@@ -40,9 +49,10 @@ class AxiosChain extends RequestChain<AxiosResponse<any>> {
 
   public download(params: {
     url: string;
-    part_size?: number;
     dir_path: string;
-    concurrent: number;
+    name?: string;
+    part_size?: number;
+    concurrent?: number;
   }) {
     const downloader = new Downloader({
       ...params,

@@ -3,7 +3,9 @@ import RequestChain from "../core";
 import Uploader, { UploaderParts } from "./uploader";
 import Downloader from "./downloader";
 declare class AxiosChain extends RequestChain<AxiosResponse<any>> {
-    constructor(config: Omit<RequestChain.BaseConfig, "request">, interceptor?: RequestChain.Interceptor<AxiosResponse<any>>);
+    constructor(config: Omit<RequestChain.BaseConfig, "request"> & {
+        agent?: any;
+    }, interceptor?: RequestChain.Interceptor<AxiosResponse<any>>);
     upload<T = any>(parmas: {
         file_path: string;
         url: string;
@@ -22,9 +24,10 @@ declare class AxiosChain extends RequestChain<AxiosResponse<any>> {
     }): Uploader<T>;
     download(params: {
         url: string;
-        part_size?: number;
         dir_path: string;
-        concurrent: number;
+        name?: string;
+        part_size?: number;
+        concurrent?: number;
     }): Downloader;
 }
 export { Uploader, Downloader };

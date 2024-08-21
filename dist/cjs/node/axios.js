@@ -12,7 +12,11 @@ const downloader_1 = __importDefault(require("./downloader"));
 exports.Downloader = downloader_1.default;
 class AxiosChain extends core_1.default {
     constructor(config, interceptor) {
-        super(Object.assign(Object.assign({}, config), { request: axios_1.default.request }), interceptor);
+        super(Object.assign(Object.assign({}, config), { request: (params) => {
+                return axios_1.default.request(Object.assign(params, config.agent
+                    ? { httpAgent: config.agent, httpsAgent: config.agent }
+                    : {}));
+            } }), interceptor);
     }
     upload(parmas) {
         const uploader = new uploader_1.default(Object.assign(Object.assign({}, parmas), { request: this.request.bind(this) }));

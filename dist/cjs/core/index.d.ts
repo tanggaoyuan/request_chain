@@ -33,7 +33,7 @@ export declare class RequestChainResponse<T = any, R extends RequestChain.Respon
     send(data: any, mix?: boolean): this;
     query(params: Record<string, any> | any[], mix?: boolean): this;
     [Symbol.toStringTag]: string;
-    getData(): Promise<any>;
+    getData(): Promise<T>;
 }
 declare class RequestChain<R extends RequestChain.Response<any> = RequestChain.Response<any>> {
     private readonly config;
