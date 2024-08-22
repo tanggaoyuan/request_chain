@@ -129,18 +129,19 @@ class Downloader {
     }
   }
 
-  public setConfig(config: RequestChain.Config, mix = true) {
+  public setConfig(config: Partial<RequestChain.Config>, mix = true) {
     this.config = mix
       ? {
           ...this.config,
           ...config,
         }
-      : config;
+      : (config as RequestChain.Config);
     return this;
   }
 
   public async getFileInfo() {
     const response = await this.request({
+      ...this.config,
       method: "HEAD",
       url: this.config.url,
       mergeSame: true,
@@ -565,7 +566,7 @@ class Downloader {
     return this.finishing();
   }
 
-  public async save(save_path?: string) {
+  public async save(save_path?: string): Promise<boolean> {
     if (!this.status.every((value) => value === "done")) {
       return Promise.reject(new Error("文件未下载完成"));
     }

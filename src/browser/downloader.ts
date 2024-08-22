@@ -104,18 +104,19 @@ class Downloader {
     });
   }
 
-  public setConfig(config: RequestChain.Config, mix = true) {
+  public setConfig(config: Partial<RequestChain.Config>, mix = true) {
     this.config = mix
       ? {
           ...this.config,
           ...config,
         }
-      : config;
+      : (config as RequestChain.Config);
     return this;
   }
 
   public async getFileInfo() {
     const response = await this.request({
+      ...this.config,
       method: "HEAD",
       url: this.config.url,
       mergeSame: true,
@@ -553,7 +554,7 @@ class Downloader {
     });
   }
 
-  public async save() {
+  public async save(): Promise<boolean> {
     if (!this.status.every((value) => value === "done")) {
       return Promise.reject(new Error("文件未下载完成"));
     }
@@ -574,7 +575,7 @@ class Downloader {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    return url;
+    return true;
   }
 
   /**

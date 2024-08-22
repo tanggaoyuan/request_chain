@@ -1,76 +1,74 @@
 export abstract class Cache {
-    public readonly stote: Record<
-        string,
-        { expires?: number; data: any } | undefined
-    >;
+  public store: Record<string, { expires?: number; data: any } | undefined> =
+    {};
 
-    constructor() {
-        try {
-            const cache = this.read();
-            Object.keys(cache).forEach((key) => {
-                const value = cache[key];
-                if (!value) {
-                    return;
-                }
-                if (
-                    typeof value.expires === 'number' &&
-                    value.expires < Date.now()
-                ) {
-                    cache[key] = undefined;
-                }
-            });
-            this.stote = cache ?? {};
-            this.write(this.stote);
-        } catch (error) {
-            this.stote = {};
-        }
-    }
+  constructor() {
+    this.init();
+  }
 
-    public abstract read(): Record<
-        string,
-        { expires?: number; data: any } | undefined
-    >;
-    public abstract write(
-        data: Record<string, { expires?: number; data: any } | undefined>,
-    ): boolean;
-
-    public get<T = any>(key: string) {
-        const value = this.stote[key];
+  public async init() {
+    try {
+      const cache = await this.read();
+      Object.keys(cache).forEach((key) => {
+        const value = cache[key];
         if (!value) {
-            return null;
+          return;
         }
-        if (typeof value.expires === 'number' && value.expires < Date.now()) {
-            this.delete(key);
-            return null;
+        if (typeof value.expires === "number" && value.expires < Date.now()) {
+          cache[key] = undefined;
         }
-        return value.data as T;
+      });
+      this.store = cache ?? {};
+    } catch (error) {
+      this.store = {};
     }
+  }
 
-    public set(key: string, data: any, expires?: number) {
-        this.stote[key] = {
-            data,
-            expires:
-                typeof expires === 'number' ? Date.now() + expires : undefined,
-        };
-        this.write(this.stote);
-    }
+  public abstract read(): Promise<
+    Record<string, { expires?: number; data: any } | undefined>
+  >;
 
-    public delete(key: string) {
-        if (this.stote[key]) {
-            this.stote[key] = undefined;
-            this.write(this.stote);
-        }
+  public abstract write(
+    data: Record<string, { expires?: number; data: any } | undefined>
+  ): Promise<boolean>;
+
+  public get<T = any>(key: string) {
+    const value = this.store[key];
+    if (!value) {
+      return null;
     }
+    if (typeof value.expires === "number" && value.expires < Date.now()) {
+      this.delete(key);
+      return null;
+    }
+    return value.data as T;
+  }
+
+  public set(key: string, data: any, expires?: number) {
+    this.store[key] = {
+      data,
+      expires: typeof expires === "number" ? Date.now() + expires : undefined,
+    };
+    this.write(this.store);
+  }
+
+  public delete(key: string) {
+    if (this.store[key]) {
+      this.store[key] = undefined;
+      this.write(this.store);
+    }
+  }
 }
 
 export class MemoryCache extends Cache {
-    public read(): Record<string, { expires?: number; data: any } | undefined> {
-        return {};
-    }
-
-    public write(): boolean {
-        return true;
-    }
+  public read(): Promise<
+    Record<string, { expires?: number; data: any } | undefined>
+  > {
+    return Promise.resolve({});
+  }
+  public write(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
 }
 
 // export class LocalCache extends Cache {
