@@ -1,10 +1,9 @@
+import { isBrowser } from "./util";
+import fs from "fs";
+
 export abstract class Cache {
   public store: Record<string, { expires?: number; data: any } | undefined> =
     {};
-
-  constructor() {
-    this.init();
-  }
 
   public async init() {
     try {
@@ -61,6 +60,10 @@ export abstract class Cache {
 }
 
 export class MemoryCache extends Cache {
+  constructor() {
+    super();
+    this.init();
+  }
   public read(): Promise<
     Record<string, { expires?: number; data: any } | undefined>
   > {
@@ -71,65 +74,41 @@ export class MemoryCache extends Cache {
   }
 }
 
-// export class LocalCache extends Cache {
-//     private readonly path: string;
+export class LocalCache extends Cache {
+  private readonly path: string;
 
-//     constructor(path: string) {
-//         super();
-//         this.path = path;
-//     }
+  constructor(path: string) {
+    super();
+    this.path = path;
+    this.init();
+  }
 
-//     public read(): Record<string, { expires?: number; data: any } | undefined> {
-//         try {
-//             if (isBrowser()) {
-//                 return JSON.parse(
-//                     window.localStorage.getItem(this.path) || '{}',
-//                 );
-//             } else {
-//                 return JSON.parse(fs.readFileSync(this.path, 'utf-8'));
-//             }
-//         } catch (error) {
-//             return {};
-//         }
-//     }
+  public async read(): Promise<
+    Record<string, { expires?: number; data: any } | undefined>
+  > {
+    try {
+      if (isBrowser()) {
+        return JSON.parse(window.localStorage.getItem(this.path) || "{}");
+      } else {
+        return JSON.parse(fs.readFileSync(this.path, "utf-8"));
+      }
+    } catch (error) {
+      return {};
+    }
+  }
 
-//     public write(
-//         data: Record<string, { expires?: number; data: any } | undefined>,
-//     ): boolean {
-//         try {
-//             if (isBrowser()) {
-//                 window.localStorage.setItem(this.path, JSON.stringify(data));
-//             } else {
-//                 fs.writeFileSync(this.path, JSON.stringify(data), 'utf-8');
-//             }
-
-//             return true;
-//         } catch (error) {
-//             return false;
-//         }
-//     }
-// }
-
-// export class UniLocalCache extends Cache {
-//     private readonly key: string;
-
-//     constructor(path: string) {
-//         super();
-//         this.key = path;
-//     }
-
-//     public read(): Record<string, { expires?: number; data: any } | undefined> {
-//         try {
-//             return JSON.parse(uni.getStorageSync(this.key));
-//         } catch (error) {
-//             return {};
-//         }
-//     }
-
-//     public write(
-//         data: Record<string, { expires?: number; data: any } | undefined>,
-//     ): boolean {
-//         uni.setStorageSync(this.key, JSON.stringify(data));
-//         return true;
-//     }
-// }
+  public async write(
+    data: Record<string, { expires?: number; data: any } | undefined>
+  ) {
+    try {
+      if (isBrowser()) {
+        window.localStorage.setItem(this.path, JSON.stringify(data));
+      } else {
+        fs.writeFileSync(this.path, JSON.stringify(data), "utf-8");
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}

@@ -35,7 +35,7 @@ declare class Downloader {
         concurrent?: number;
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
-    setConfig(config: RequestChain.Config, mix?: boolean): this;
+    setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
         total: number;
         type: any;
@@ -103,7 +103,7 @@ declare class Downloader {
     private setChache;
     private getChache;
     private clearChache;
-    save(): Promise<string>;
+    save(): Promise<boolean>;
     /**
      * 销毁实例 释放内存,清空indexDb缓存
      */

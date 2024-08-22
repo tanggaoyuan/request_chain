@@ -41,7 +41,7 @@ declare class Downloader {
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
     createDir(filePath: string): void;
-    setConfig(config: RequestChain.Config, mix?: boolean): this;
+    setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
         total: number;
         type: any;
@@ -105,7 +105,7 @@ declare class Downloader {
         status: "stop";
         error: any;
     })[]>;
-    save(save_path?: string): Promise<unknown>;
+    save(save_path?: string): Promise<boolean>;
     /**
      * 删除下载的切片
      */

@@ -70,12 +70,7 @@ class Downloader {
     }
     getFileInfo() {
         return __awaiter(this, void 0, void 0, function* () {
-            const response = yield this.request({
-                method: "HEAD",
-                url: this.config.url,
-                mergeSame: true,
-                cache: "memory",
-            });
+            const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
             const total = Number(response.headers["content-length"]);
             const type = response.headers["content-type"];
             const lastModified = response.headers["last-modified"];

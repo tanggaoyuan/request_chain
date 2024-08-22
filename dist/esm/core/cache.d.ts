@@ -1,26 +1,39 @@
 export declare abstract class Cache {
-    readonly stote: Record<string, {
+    store: Record<string, {
         expires?: number;
         data: any;
     } | undefined>;
-    constructor();
-    abstract read(): Record<string, {
+    init(): Promise<void>;
+    abstract read(): Promise<Record<string, {
         expires?: number;
         data: any;
-    } | undefined>;
+    } | undefined>>;
     abstract write(data: Record<string, {
         expires?: number;
         data: any;
-    } | undefined>): boolean;
+    } | undefined>): Promise<boolean>;
     get<T = any>(key: string): T;
     set(key: string, data: any, expires?: number): void;
     delete(key: string): void;
 }
 export declare class MemoryCache extends Cache {
-    read(): Record<string, {
+    constructor();
+    read(): Promise<Record<string, {
         expires?: number;
         data: any;
-    } | undefined>;
-    write(): boolean;
+    } | undefined>>;
+    write(): Promise<boolean>;
+}
+export declare class LocalCache extends Cache {
+    private readonly path;
+    constructor(path: string);
+    read(): Promise<Record<string, {
+        expires?: number;
+        data: any;
+    } | undefined>>;
+    write(data: Record<string, {
+        expires?: number;
+        data: any;
+    } | undefined>): Promise<boolean>;
 }
 //# sourceMappingURL=cache.d.ts.map
