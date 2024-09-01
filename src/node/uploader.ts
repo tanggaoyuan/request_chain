@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 import { getMd5, getMd5Thread } from "./md5";
 import fs from "fs";
 import path from "path";

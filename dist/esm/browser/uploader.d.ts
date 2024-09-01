@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 export interface UploaderParts {
     name: string;
     total: number;

@@ -9,6 +9,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const cache_1 = require("./cache");
+const store = new cache_1.IndexDBCache("downloads");
 class Downloader {
     constructor(options) {
         this.tasks = [];
@@ -27,25 +29,6 @@ class Downloader {
          */
         this.speedRef = 0;
         this.speedsize = [];
-        this.openDb = () => {
-            return new Promise((resolve, reject) => {
-                const indexedDB = window.indexedDB;
-                if (!indexedDB) {
-                    return Promise.reject(new Error("不支持DB"));
-                }
-                const request = indexedDB.open("DOWNLOAD_STORE");
-                request.onsuccess = function (event) {
-                    resolve(event.target.result);
-                };
-                request.onerror = function (event) {
-                    reject(new Error("打开数据库失败"));
-                };
-                request.onupgradeneeded = function (event) {
-                    const db = event.target.result;
-                    db.createObjectStore("downloads", { keyPath: "id" });
-                };
-            });
-        };
         const callback = [null, null];
         this.downloader = {
             callback,
@@ -382,47 +365,24 @@ class Downloader {
     }
     setChache(part, chunk) {
         return __awaiter(this, void 0, void 0, function* () {
-            const db = yield this.openDb();
             const file = yield this.getFileInfo();
             const parts = yield this.getParts();
-            return new Promise((resolve, reject) => {
-                const task = db
-                    .transaction(["downloads"], "readwrite")
-                    .objectStore("downloads")
-                    .add(Object.assign(Object.assign({}, parts[part]), { chunk, id: `${file.key}@@${part}` }));
-                task.onsuccess = resolve;
-                task.onerror = reject;
-            });
+            return store.set(`${file.key}@@${part}`, Object.assign(Object.assign({}, parts[part]), { chunk }));
         });
     }
     getChache(part) {
         return __awaiter(this, void 0, void 0, function* () {
-            const db = yield this.openDb();
             const file = yield this.getFileInfo();
-            const transaction = db.transaction(["downloads"]);
-            const objectStore = transaction.objectStore("downloads");
-            const request = objectStore.get(`${file.key}@@${part}`);
-            return new Promise((resolve, reject) => {
-                request.onerror = function () {
-                    reject(request.error);
-                };
-                request.onsuccess = function () {
-                    resolve(request.result || false);
-                };
-            });
+            return store.get(`${file.key}@@${part}`);
         });
     }
     clearChache() {
         return __awaiter(this, void 0, void 0, function* () {
-            const db = yield this.openDb();
             const file = yield this.getFileInfo();
             const parts = yield this.getParts();
-            const table = db
-                .transaction(["downloads"], "readwrite")
-                .objectStore("downloads");
-            parts.forEach((_, index) => {
-                table.delete(`${file.key}@@${index}`);
-            });
+            for (let index = 0; index > parts.length; index++) {
+                yield store.delete(`${file.key}@@${index}`);
+            }
         });
     }
     save() {

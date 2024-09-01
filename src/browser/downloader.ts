@@ -1,4 +1,5 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
+import { IndexDBCache } from "./cache";
 
 export interface DownloaderPart {
   start: number;
@@ -10,6 +11,8 @@ export interface DownloaderPart {
   part_size: number;
   part_count: number;
 }
+
+const store = new IndexDBCache("downloads");
 
 class Downloader {
   private get_parts_promise?: Promise<Array<DownloaderPart>>;
@@ -486,72 +489,26 @@ class Downloader {
     return this.finishing();
   }
 
-  private openDb = () => {
-    return new Promise<IDBDatabase>((resolve, reject) => {
-      const indexedDB = window.indexedDB;
-      if (!indexedDB) {
-        return Promise.reject(new Error("不支持DB"));
-      }
-      const request = indexedDB.open("DOWNLOAD_STORE");
-      request.onsuccess = function (event: any) {
-        resolve(event.target.result);
-      };
-      request.onerror = function (event) {
-        reject(new Error("打开数据库失败"));
-      };
-      request.onupgradeneeded = function (event: any) {
-        const db = event.target.result;
-        db.createObjectStore("downloads", { keyPath: "id" });
-      };
-    });
-  };
-
   private async setChache(part: number, chunk: Blob) {
-    const db = await this.openDb();
     const file = await this.getFileInfo();
     const parts = await this.getParts();
-    return new Promise((resolve, reject) => {
-      const task = db
-        .transaction(["downloads"], "readwrite")
-        .objectStore("downloads")
-        .add({
-          ...parts[part],
-          chunk,
-          id: `${file.key}@@${part}`,
-        });
-      task.onsuccess = resolve;
-      task.onerror = reject;
+    return store.set(`${file.key}@@${part}`, {
+      ...parts[part],
+      chunk,
     });
   }
 
   private async getChache(part: number) {
-    const db = await this.openDb();
     const file = await this.getFileInfo();
-    const transaction = db.transaction(["downloads"]);
-    const objectStore = transaction.objectStore("downloads");
-
-    const request = objectStore.get(`${file.key}@@${part}`);
-
-    return new Promise<DownloaderPart & { chunk: Blob }>((resolve, reject) => {
-      request.onerror = function () {
-        reject(request.error);
-      };
-      request.onsuccess = function () {
-        resolve(request.result || false);
-      };
-    });
+    return store.get(`${file.key}@@${part}`);
   }
 
   private async clearChache() {
-    const db = await this.openDb();
     const file = await this.getFileInfo();
     const parts = await this.getParts();
-    const table = db
-      .transaction(["downloads"], "readwrite")
-      .objectStore("downloads");
-    parts.forEach((_, index) => {
-      table.delete(`${file.key}@@${index}`);
-    });
+    for (let index = 0; index > parts.length; index++) {
+      await store.delete(`${file.key}@@${index}`);
+    }
   }
 
   public async save(): Promise<boolean> {

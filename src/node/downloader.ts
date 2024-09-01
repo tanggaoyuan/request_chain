@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 import fs from "fs";
 import path from "path";
 
