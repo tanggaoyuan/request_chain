@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 export interface UploaderParts {
     name: string;
     total: number;
@@ -123,3 +123,4 @@ declare class Uploader<T = any> {
     destroyed(): Promise<void>;
 }
 export default Uploader;
+//# sourceMappingURL=uploader.d.ts.map

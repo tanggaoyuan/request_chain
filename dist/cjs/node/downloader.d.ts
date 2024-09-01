@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 export interface DownloaderPart {
     start: number;
     end: number;
@@ -116,3 +116,4 @@ declare class Downloader {
     destroyed(): Promise<void>;
 }
 export default Downloader;
+//# sourceMappingURL=downloader.d.ts.map

@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 export interface DownloaderPart {
     start: number;
     end: number;
@@ -99,7 +99,6 @@ declare class Downloader {
         status: "stop";
         error: any;
     })[]>;
-    private openDb;
     private setChache;
     private getChache;
     private clearChache;
