@@ -1,6 +1,7 @@
 import { RequestChain, RequestChainResponse } from "../core";
 import fs from "fs";
 import path from "path";
+import os from "os";
 
 export interface DownloaderPart {
   start: number;
@@ -22,10 +23,9 @@ class Downloader {
     abort: () => void;
   }> = [];
 
-  private name?: string;
   private part_size?: number;
   private status: Array<"pending" | "pause" | "done" | "stop"> = [];
-  private downloader?: {
+  private downloader: {
     promise: Promise<
       Array<
         | {
@@ -72,18 +72,14 @@ class Downloader {
 
   public isDestroyed = false;
 
-  public dir_path: string;
+  public temp_path: string;
 
   constructor(options: {
     url: string;
     /**
-     * 保存的文件名称
+     * 缓存路劲
      */
-    name?: string;
-    /**
-     * 保存的文件夹路劲
-     */
-    dir_path: string;
+    temp_path?: string;
     /**
      * 按大小切片
      */
@@ -102,31 +98,16 @@ class Downloader {
     this.concurrent = options.concurrent || 1;
     this.request = options.request;
     this.config.url = options.url;
-    this.name = options.name;
     this.part_size = options.part_size;
-    this.dir_path = options.dir_path;
-    this.getFileInfo().then((response) => {
-      const strs = response.name.split(".");
-      strs.pop();
-      const paths = [options.dir_path, strs.join("_")];
-      const pathname = path.join(...paths);
-      this.createDir(pathname);
-    });
+    this.temp_path =
+      options.temp_path || path.join(os.tmpdir(), "REQUEST_CHAIN");
+    fs.mkdirSync(this.temp_path, { recursive: true });
+    this.getFileInfo();
     this.getParts().then((parts) => {
       parts.forEach((__, index) => {
         this.status[index] = "pause";
       });
     });
-  }
-
-  public createDir(filePath: string) {
-    const parts = filePath.split(path.sep);
-    for (let i = 1; i <= parts.length; i++) {
-      const currentPath = path.join(...parts.slice(0, i));
-      if (!fs.existsSync(currentPath) && !path.extname(currentPath)) {
-        fs.mkdirSync(currentPath);
-      }
-    }
   }
 
   public setConfig(config: Partial<RequestChain.Config>, mix = true) {
@@ -140,6 +121,9 @@ class Downloader {
   }
 
   public async getFileInfo() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const response = await this.request({
       ...this.config,
       method: "HEAD",
@@ -152,12 +136,25 @@ class Downloader {
     const lastModified = response.headers["last-modified"];
     const [url] = this.config.url.split("?");
     const originalName = url.split("/").pop() || "";
-    const name = this.name || originalName;
-    const key = `${originalName}@@${total}`;
-    return { total, type, lastModified, originalName, name, key };
+    const key = `${originalName}@@${type}@@${total}`;
+    const temp_dir = path.join(this.temp_path, key);
+    fs.mkdirSync(temp_dir, { recursive: true });
+    const name = originalName;
+    return {
+      total,
+      type,
+      lastModified,
+      originalName,
+      name,
+      key,
+      temp_dir,
+    };
   }
 
   public async getParts() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (!this.get_parts_promise) {
       const info = await this.getFileInfo();
       this.get_parts_promise = new Promise((resolve) => {
@@ -258,6 +255,10 @@ class Downloader {
     part: number,
     data: Record<string, any> = {}
   ): Promise<Buffer> {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
+
     const parts = await this.getParts();
     const part_info = parts[part];
 
@@ -272,11 +273,9 @@ class Downloader {
 
     this.status[part] = "pending";
 
-    const strs = part_info.name.split(".");
-    strs.pop();
-    const dirname = strs.join("_");
-    const dir_path = path.join(this.dir_path, dirname);
-    const file_path = path.join(dir_path, part_info.part_name);
+    const file_info = await this.getFileInfo();
+
+    const file_path = path.join(file_info.temp_dir, part_info.part_name);
 
     const isExistFile = fs.existsSync(file_path);
 
@@ -401,6 +400,9 @@ class Downloader {
    * 下载大小小于size时,终止请求
    */
   public pausePart(part: number, size = Infinity) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (this.status[part] !== "pending") {
       return;
     }
@@ -415,6 +417,9 @@ class Downloader {
    * 停止当前任务，所有任务结束时，upload返回结果
    */
   public stopPart(part: number) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (this.status[part] === "done") {
       return;
     }
@@ -427,6 +432,9 @@ class Downloader {
    * 通过part下载,该part将进入完成状态
    */
   public async skipPart(part: number, data: Buffer) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     this.status[part] = "done";
     this.tasks[part] = {
@@ -485,6 +493,9 @@ class Downloader {
    * 等待所有任务结束，返回结果
    */
   public async finishing() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const status = this.status.filter((value) => value);
     const isPause = status.some((value) => value === "pause");
     const isPending = status.some((value) => value === "pending");
@@ -512,26 +523,18 @@ class Downloader {
           });
         }
       });
-      this.downloader?.callback[0](results);
+      this.downloader.callback[0](results);
     }
-    return this.downloader?.promise as Promise<
-      Array<
-        | {
-            status: "done";
-            data: Buffer;
-          }
-        | {
-            status: "stop";
-            error: any;
-          }
-      >
-    >;
+    return this.downloader.promise;
   }
 
   /**
    * 开始下载
    */
   public async download() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     const promises = parts.map((_, index) => {
       return () => this.startPart(index);
@@ -566,7 +569,15 @@ class Downloader {
     return this.finishing();
   }
 
-  public async save(save_path?: string): Promise<boolean> {
+  /**
+   *
+   * @param save_path 可为文件夹 也可为具体文件
+   * @returns
+   */
+  public async save(save_path: string): Promise<boolean> {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (!this.status.every((value) => value === "done")) {
       return Promise.reject(new Error("文件未下载完成"));
     }
@@ -579,49 +590,36 @@ class Downloader {
       }
       blobs.push(value.data);
     }
-    if (save_path) {
-      return new Promise<boolean>((resolve, reject) => {
-        const file_path = path.extname(save_path)
-          ? save_path
-          : path.join(save_path, file.name);
-        fs.writeFile(file_path, Buffer.concat(blobs), (err: any) => {
-          if (err) {
-            reject(false);
-          } else {
-            resolve(true);
-          }
-        });
+
+    return new Promise<boolean>((resolve, reject) => {
+      const file_path = path.extname(save_path)
+        ? save_path
+        : path.join(save_path, file.name);
+      fs.writeFile(file_path, Buffer.concat(blobs), (err: any) => {
+        if (err) {
+          reject(false);
+        } else {
+          resolve(true);
+        }
       });
-    } else {
-      return new Promise((resolve, reject) => {
-        const file_path = path.join(this.dir_path, file.name);
-        fs.writeFile(file_path, Buffer.concat(blobs), (err: any) => {
-          if (err) {
-            reject(false);
-          } else {
-            resolve(true);
-          }
-        });
-      });
-    }
+    });
   }
 
   /**
-   * 删除下载的切片
+   * 删除下载的缓存
    */
-  public async deleteDownloadFile() {
+  public async deleteDownloadTemp() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const file = await this.getFileInfo();
-    const strs = file.name.split(".");
-    strs.pop();
-    const dirname = strs.join("_");
-    const dir_path = path.join(this.dir_path, dirname);
-    const isExist = fs.existsSync(dir_path);
+    const isExist = fs.existsSync(file.temp_dir);
     if (!isExist) {
       return true;
     }
     this.tasks = [];
     return new Promise((resolve, reject) => {
-      fs.rm(dir_path, { force: true, recursive: true }, (err) => {
+      fs.rm(file.temp_dir, { force: true, recursive: true }, (err) => {
         if (err) {
           reject(false);
         } else {
@@ -635,10 +633,11 @@ class Downloader {
    * 销毁实例 释放内存,清空下载缓存
    */
   public async destroyed() {
-    this.deleteDownloadFile();
+    this.deleteDownloadTemp();
     this.tasks = [];
     this.get_parts_promise = undefined;
-    this.downloader = undefined;
+    this.downloader[1]("任务已被销毁");
+    this.downloader.promise = Promise.reject("任务已被销毁");
     this.isDestroyed = true;
     this.events = new Map();
   }

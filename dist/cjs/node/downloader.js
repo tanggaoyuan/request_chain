@@ -14,6 +14,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
 class Downloader {
     constructor(options) {
         this.tasks = [];
@@ -43,30 +44,16 @@ class Downloader {
         this.concurrent = options.concurrent || 1;
         this.request = options.request;
         this.config.url = options.url;
-        this.name = options.name;
         this.part_size = options.part_size;
-        this.dir_path = options.dir_path;
-        this.getFileInfo().then((response) => {
-            const strs = response.name.split(".");
-            strs.pop();
-            const paths = [options.dir_path, strs.join("_")];
-            const pathname = path_1.default.join(...paths);
-            this.createDir(pathname);
-        });
+        this.temp_path =
+            options.temp_path || path_1.default.join(os_1.default.tmpdir(), "REQUEST_CHAIN");
+        fs_1.default.mkdirSync(this.temp_path, { recursive: true });
+        this.getFileInfo();
         this.getParts().then((parts) => {
             parts.forEach((__, index) => {
                 this.status[index] = "pause";
             });
         });
-    }
-    createDir(filePath) {
-        const parts = filePath.split(path_1.default.sep);
-        for (let i = 1; i <= parts.length; i++) {
-            const currentPath = path_1.default.join(...parts.slice(0, i));
-            if (!fs_1.default.existsSync(currentPath) && !path_1.default.extname(currentPath)) {
-                fs_1.default.mkdirSync(currentPath);
-            }
-        }
     }
     setConfig(config, mix = true) {
         this.config = mix
@@ -75,19 +62,35 @@ class Downloader {
     }
     getFileInfo() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
             const total = Number(response.headers["content-length"]);
             const type = response.headers["content-type"];
             const lastModified = response.headers["last-modified"];
             const [url] = this.config.url.split("?");
             const originalName = url.split("/").pop() || "";
-            const name = this.name || originalName;
-            const key = `${originalName}@@${total}`;
-            return { total, type, lastModified, originalName, name, key };
+            const key = `${originalName}@@${type}@@${total}`;
+            const temp_dir = path_1.default.join(this.temp_path, key);
+            fs_1.default.mkdirSync(temp_dir, { recursive: true });
+            const name = originalName;
+            return {
+                total,
+                type,
+                lastModified,
+                originalName,
+                name,
+                key,
+                temp_dir,
+            };
         });
     }
     getParts() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             if (!this.get_parts_promise) {
                 const info = yield this.getFileInfo();
                 this.get_parts_promise = new Promise((resolve) => {
@@ -170,6 +173,9 @@ class Downloader {
     }
     startPart(part_1) {
         return __awaiter(this, arguments, void 0, function* (part, data = {}) {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const parts = yield this.getParts();
             const part_info = parts[part];
             if (["done", "pending", "stop"].includes(this.status[part])) {
@@ -181,11 +187,8 @@ class Downloader {
                 return task.promise;
             }
             this.status[part] = "pending";
-            const strs = part_info.name.split(".");
-            strs.pop();
-            const dirname = strs.join("_");
-            const dir_path = path_1.default.join(this.dir_path, dirname);
-            const file_path = path_1.default.join(dir_path, part_info.part_name);
+            const file_info = yield this.getFileInfo();
+            const file_path = path_1.default.join(file_info.temp_dir, part_info.part_name);
             const isExistFile = fs_1.default.existsSync(file_path);
             let start = part_info.start;
             const end = part_info.end;
@@ -289,6 +292,9 @@ class Downloader {
      */
     pausePart(part, size = Infinity) {
         var _a;
+        if (this.isDestroyed) {
+            return Promise.reject("任务已被销毁");
+        }
         if (this.status[part] !== "pending") {
             return;
         }
@@ -303,6 +309,9 @@ class Downloader {
      */
     stopPart(part) {
         var _a;
+        if (this.isDestroyed) {
+            return Promise.reject("任务已被销毁");
+        }
         if (this.status[part] === "done") {
             return;
         }
@@ -315,6 +324,9 @@ class Downloader {
      */
     skipPart(part, data) {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const parts = yield this.getParts();
             this.status[part] = "done";
             this.tasks[part] = {
@@ -368,7 +380,9 @@ class Downloader {
      */
     finishing() {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const status = this.status.filter((value) => value);
             const isPause = status.some((value) => value === "pause");
             const isPending = status.some((value) => value === "pending");
@@ -391,9 +405,9 @@ class Downloader {
                         });
                     }
                 });
-                (_a = this.downloader) === null || _a === void 0 ? void 0 : _a.callback[0](results);
+                this.downloader.callback[0](results);
             }
-            return (_b = this.downloader) === null || _b === void 0 ? void 0 : _b.promise;
+            return this.downloader.promise;
         });
     }
     /**
@@ -401,6 +415,9 @@ class Downloader {
      */
     download() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const parts = yield this.getParts();
             const promises = parts.map((_, index) => {
                 return () => this.startPart(index);
@@ -428,8 +445,16 @@ class Downloader {
             return this.finishing();
         });
     }
+    /**
+     *
+     * @param save_path 可为文件夹 也可为具体文件
+     * @returns
+     */
     save(save_path) {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             if (!this.status.every((value) => value === "done")) {
                 return Promise.reject(new Error("文件未下载完成"));
             }
@@ -442,53 +467,37 @@ class Downloader {
                 }
                 blobs.push(value.data);
             }
-            if (save_path) {
-                return new Promise((resolve, reject) => {
-                    const file_path = path_1.default.extname(save_path)
-                        ? save_path
-                        : path_1.default.join(save_path, file.name);
-                    fs_1.default.writeFile(file_path, Buffer.concat(blobs), (err) => {
-                        if (err) {
-                            reject(false);
-                        }
-                        else {
-                            resolve(true);
-                        }
-                    });
+            return new Promise((resolve, reject) => {
+                const file_path = path_1.default.extname(save_path)
+                    ? save_path
+                    : path_1.default.join(save_path, file.name);
+                fs_1.default.writeFile(file_path, Buffer.concat(blobs), (err) => {
+                    if (err) {
+                        reject(false);
+                    }
+                    else {
+                        resolve(true);
+                    }
                 });
-            }
-            else {
-                return new Promise((resolve, reject) => {
-                    const file_path = path_1.default.join(this.dir_path, file.name);
-                    fs_1.default.writeFile(file_path, Buffer.concat(blobs), (err) => {
-                        if (err) {
-                            reject(false);
-                        }
-                        else {
-                            resolve(true);
-                        }
-                    });
-                });
-            }
+            });
         });
     }
     /**
-     * 删除下载的切片
+     * 删除下载的缓存
      */
-    deleteDownloadFile() {
+    deleteDownloadTemp() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const file = yield this.getFileInfo();
-            const strs = file.name.split(".");
-            strs.pop();
-            const dirname = strs.join("_");
-            const dir_path = path_1.default.join(this.dir_path, dirname);
-            const isExist = fs_1.default.existsSync(dir_path);
+            const isExist = fs_1.default.existsSync(file.temp_dir);
             if (!isExist) {
                 return true;
             }
             this.tasks = [];
             return new Promise((resolve, reject) => {
-                fs_1.default.rm(dir_path, { force: true, recursive: true }, (err) => {
+                fs_1.default.rm(file.temp_dir, { force: true, recursive: true }, (err) => {
                     if (err) {
                         reject(false);
                     }
@@ -504,10 +513,11 @@ class Downloader {
      */
     destroyed() {
         return __awaiter(this, void 0, void 0, function* () {
-            this.deleteDownloadFile();
+            this.deleteDownloadTemp();
             this.tasks = [];
             this.get_parts_promise = undefined;
-            this.downloader = undefined;
+            this.downloader[1]("任务已被销毁");
+            this.downloader.promise = Promise.reject("任务已被销毁");
             this.isDestroyed = true;
             this.events = new Map();
         });

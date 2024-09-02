@@ -23,10 +23,9 @@ class Downloader {
     abort: () => void;
   }> = [];
 
-  private name?: string;
   private part_size?: number;
   private status: Array<"pending" | "pause" | "done" | "stop"> = [];
-  private downloader?: {
+  private downloader: {
     promise: Promise<
       Array<
         | {
@@ -97,7 +96,6 @@ class Downloader {
     this.concurrent = options.concurrent || 1;
     this.request = options.request;
     this.config.url = options.url;
-    this.name = options.name;
     this.part_size = options.part_size;
     this.getFileInfo();
     this.getParts().then((parts) => {
@@ -118,6 +116,10 @@ class Downloader {
   }
 
   public async getFileInfo() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
+
     const response = await this.request({
       ...this.config,
       method: "HEAD",
@@ -131,12 +133,16 @@ class Downloader {
     const lastModified = response.headers["last-modified"];
     const [url] = this.config.url.split("?");
     const originalName = url.split("/").pop() || "";
-    const name = this.name || originalName;
+    const name = originalName;
     const key = `${originalName}@@${total}`;
     return { total, type, lastModified, originalName, name, key };
   }
 
   public async getParts() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
+
     if (!this.get_parts_promise) {
       const info = await this.getFileInfo();
       this.get_parts_promise = new Promise((resolve) => {
@@ -234,6 +240,9 @@ class Downloader {
   }
 
   public async startPart(part: number, data: Record<string, any> = {}) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     const part_info = parts[part];
     if (["done", "pending", "stop"].includes(this.status[part])) {
@@ -321,6 +330,9 @@ class Downloader {
    * 下载大小小于size时,终止请求
    */
   public pausePart(part: number, size = Infinity) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (this.status[part] !== "pending") {
       return;
     }
@@ -335,6 +347,9 @@ class Downloader {
    * 停止当前任务，所有任务结束时，upload返回结果
    */
   public stopPart(part: number) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (this.status[part] === "done") {
       return;
     }
@@ -344,9 +359,12 @@ class Downloader {
   }
 
   /**
-   * 通过part上传,该part将进入完成状态
+   * 跳过part上传,该part将进入完成状态
    */
   public async skipPart(part: number, data: Blob) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     this.status[part] = "done";
     this.tasks[part] = {
@@ -405,6 +423,9 @@ class Downloader {
    * 等待所有任务结束，返回结果
    */
   public async finishing() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const status = this.status.filter((value) => value);
     const isPause = status.some((value) => value === "pause");
     const isPending = status.some((value) => value === "pending");
@@ -435,9 +456,9 @@ class Downloader {
           });
         }
       });
-      this.downloader?.callback[0](results);
+      this.downloader.callback[0](results);
     }
-    return this.downloader?.promise as Promise<
+    return this.downloader.promise as Promise<
       Array<
         | {
             status: "done";
@@ -455,6 +476,9 @@ class Downloader {
    * 开始上传
    */
   public async download() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     const promises = parts.map((_, index) => {
       return () => this.startPart(index);
@@ -511,7 +535,10 @@ class Downloader {
     }
   }
 
-  public async save(): Promise<boolean> {
+  public async save(name?: string) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (!this.status.every((value) => value === "done")) {
       return Promise.reject(new Error("文件未下载完成"));
     }
@@ -527,12 +554,11 @@ class Downloader {
     const url = URL.createObjectURL(new Blob(blobs));
     const a = document.createElement("a");
     a.href = url;
-    a.download = file.name;
+    a.download = name || file.name;
     document.body.append(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    return true;
   }
 
   /**
@@ -542,7 +568,9 @@ class Downloader {
     this.clearChache();
     this.tasks = [];
     this.get_parts_promise = undefined;
-    this.downloader = undefined;
+    this.downloader[1]("任务已被销毁");
+    this.downloader.promise = Promise.reject("任务已被销毁");
+
     this.isDestroyed = true;
     this.events = new Map();
   }

@@ -13,26 +13,21 @@ declare class Downloader {
     private get_parts_promise?;
     private request;
     private tasks;
-    private name?;
     private part_size?;
     private status;
-    private downloader?;
+    private downloader;
     private config;
     private events;
     private progress;
     private concurrent;
     isDestroyed: boolean;
-    dir_path: string;
+    temp_path: string;
     constructor(options: {
         url: string;
         /**
-         * 保存的文件名称
+         * 缓存路劲
          */
-        name?: string;
-        /**
-         * 保存的文件夹路劲
-         */
-        dir_path: string;
+        temp_path?: string;
         /**
          * 按大小切片
          */
@@ -40,7 +35,6 @@ declare class Downloader {
         concurrent?: number;
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
-    createDir(filePath: string): void;
     setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
         total: number;
@@ -49,6 +43,7 @@ declare class Downloader {
         originalName: string;
         name: string;
         key: string;
+        temp_dir: string;
     }>;
     getParts(): Promise<DownloaderPart[]>;
     onProgress(fn: (file: {
@@ -70,11 +65,11 @@ declare class Downloader {
      * part 暂停当前切片任务,所有任务结束时，upload处于等待中
      * 下载大小小于size时,终止请求
      */
-    pausePart(part: number, size?: number): void;
+    pausePart(part: number, size?: number): Promise<never>;
     /**
      * 停止当前任务，所有任务结束时，upload返回结果
      */
-    stopPart(part: number): void;
+    stopPart(part: number): Promise<never>;
     /**
      * 通过part下载,该part将进入完成状态
      */
@@ -105,11 +100,16 @@ declare class Downloader {
         status: "stop";
         error: any;
     })[]>;
-    save(save_path?: string): Promise<boolean>;
     /**
-     * 删除下载的切片
+     *
+     * @param save_path 可为文件夹 也可为具体文件
+     * @returns
      */
-    deleteDownloadFile(): Promise<unknown>;
+    save(save_path: string): Promise<boolean>;
+    /**
+     * 删除下载的缓存
+     */
+    deleteDownloadTemp(): Promise<unknown>;
     /**
      * 销毁实例 释放内存,清空下载缓存
      */
