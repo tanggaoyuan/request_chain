@@ -11,6 +11,7 @@ export interface DownloaderPart {
 }
 declare class Downloader {
     private get_parts_promise?;
+    private get_file_info_promise?;
     private request;
     private tasks;
     private part_size?;
@@ -32,15 +33,19 @@ declare class Downloader {
          */
         part_size?: number;
         concurrent?: number;
+        /**
+         * 调用一次 缓存结果
+         */
+        fetchFileInfo?: () => Promise<{
+            name: string;
+            file_size: number;
+        }>;
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
     setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
-        total: number;
-        type: any;
-        lastModified: any;
-        originalName: string;
         name: string;
+        file_size: number;
         key: string;
     }>;
     getParts(): Promise<DownloaderPart[]>;
