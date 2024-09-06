@@ -423,7 +423,7 @@ class RequestChain {
   public request<T = any>(config: RequestChain.Config) {
     return new RequestChainResponse<T>(
       {
-        timeout: 2000,
+        timeout: 10000,
         ...this.config,
         ...config,
         interceptor: {

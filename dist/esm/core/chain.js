@@ -304,7 +304,7 @@ class RequestChain {
             : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1.2 Safari/605.1.15";
     }
     request(config) {
-        return new RequestChainResponse(Object.assign(Object.assign(Object.assign({ timeout: 2000 }, this.config), config), { interceptor: Object.assign(Object.assign({}, this.interceptor), config.interceptor), request: this.config.request }), this);
+        return new RequestChainResponse(Object.assign(Object.assign(Object.assign({ timeout: 10000 }, this.config), config), { interceptor: Object.assign(Object.assign({}, this.interceptor), config.interceptor), request: this.config.request }), this);
     }
     get(url, params) {
         return this.request({
