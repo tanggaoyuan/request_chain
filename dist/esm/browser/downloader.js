@@ -40,6 +40,7 @@ class Downloader {
         this.request = options.request;
         this.config.url = options.url;
         this.part_size = options.part_size;
+        let headers = {};
         this.get_file_info_promise = new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             try {
                 const [url] = this.config.url.split("?");
@@ -47,7 +48,7 @@ class Downloader {
                 let file_size = 0;
                 let etag = "";
                 if (options.fetchFileInfo) {
-                    const response = yield options.fetchFileInfo();
+                    const response = yield options.fetchFileInfo(this.config);
                     name = response.name;
                     file_size = response.file_size;
                 }
@@ -58,6 +59,7 @@ class Downloader {
                             const info = ContentDisposition.parse(response.headers["content-disposition"]);
                             name = info.parameters.filename;
                         }
+                        headers = Object.assign({}, response.headers);
                         file_size = Number(response.headers["content-length"]);
                         etag = response.headers["etag"];
                     }
@@ -70,6 +72,7 @@ class Downloader {
                         file_size =
                             Number((response.headers["content-range"] || "").split("/").pop()) || 0;
                         etag = response.headers["etag"];
+                        headers = Object.assign({}, response.headers);
                     }
                 }
                 const key = `${name}@@${file_size}`;
@@ -77,6 +80,8 @@ class Downloader {
                     file_size,
                     name,
                     key,
+                    etag,
+                    headers,
                 });
             }
             catch (error) {
@@ -187,6 +192,7 @@ class Downloader {
     }
     startPart(part_1) {
         return __awaiter(this, arguments, void 0, function* (part, data = {}) {
+            var _a;
             if (this.isDestroyed) {
                 return Promise.reject("任务已被销毁");
             }
@@ -222,7 +228,7 @@ class Downloader {
                 };
                 return promise;
             }
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}`, "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined }), onDownloadProgress: (value) => {
+            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}`, "If-Range": (_a = file_info.etag) !== null && _a !== void 0 ? _a : undefined }), onDownloadProgress: (value) => {
                     this.progress[part] = {
                         loaded: Math.round((value.progress || 0) * part_info.part_size),
                         total: part_info.part_size,

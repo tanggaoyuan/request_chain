@@ -22,6 +22,8 @@ class Downloader {
     file_size: number;
     key: string;
     etag?: string;
+    headers: Record<string, string>;
+    [x: string]: any;
   }>;
 
   private request: (config: RequestChain.Config) => RequestChainResponse<Blob>;
@@ -93,9 +95,10 @@ class Downloader {
     /**
      * 调用一次 缓存结果
      */
-    fetchFileInfo?: () => Promise<{
+    fetchFileInfo?: (config: RequestChain.Config) => Promise<{
       name: string;
       file_size: number;
+      [x: string]: any;
     }>;
     request: (config: RequestChain.Config) => RequestChainResponse;
   }) {
@@ -111,7 +114,7 @@ class Downloader {
     this.request = options.request;
     this.config.url = options.url;
     this.part_size = options.part_size;
-
+    let headers = {};
     this.get_file_info_promise = new Promise(async (resolve, reject) => {
       try {
         const [url] = this.config.url.split("?");
@@ -119,7 +122,7 @@ class Downloader {
         let file_size = 0;
         let etag = "";
         if (options.fetchFileInfo) {
-          const response = await options.fetchFileInfo();
+          const response = await options.fetchFileInfo(this.config);
           name = response.name;
           file_size = response.file_size;
         } else {
@@ -138,6 +141,10 @@ class Downloader {
               );
               name = info.parameters.filename;
             }
+
+            headers = {
+              ...response.headers,
+            };
 
             file_size = Number(response.headers["content-length"]);
             etag = response.headers["etag"];
@@ -163,6 +170,10 @@ class Downloader {
                 (response.headers["content-range"] || "").split("/").pop()
               ) || 0;
             etag = response.headers["etag"];
+
+            headers = {
+              ...response.headers,
+            };
           }
         }
         const key = `${name}@@${file_size}`;
@@ -170,6 +181,8 @@ class Downloader {
           file_size,
           name,
           key,
+          etag,
+          headers,
         });
       } catch (error) {
         reject(error);
@@ -350,7 +363,7 @@ class Downloader {
       headers: {
         ...this.config.headers,
         Range: `bytes=${part_info.start}-${part_info.end}`,
-        "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined,
+        "If-Range": file_info.etag ?? undefined,
       },
       onDownloadProgress: (value: any) => {
         this.progress[part] = {

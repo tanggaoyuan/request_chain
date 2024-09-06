@@ -49,6 +49,7 @@ class Downloader {
         this.temp_path =
             options.temp_path || path_1.default.join(os_1.default.tmpdir(), "REQUEST_CHAIN");
         fs_1.default.mkdirSync(this.temp_path, { recursive: true });
+        let headers = {};
         this.get_file_info_promise = new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             try {
                 const [url] = this.config.url.split("?");
@@ -56,13 +57,14 @@ class Downloader {
                 let etag = "";
                 let file_size = 0;
                 if (options.fetchFileInfo) {
-                    const response = yield options.fetchFileInfo();
+                    const response = yield options.fetchFileInfo(this.config);
                     name = response.name;
                     file_size = response.file_size;
                 }
                 else {
                     try {
                         const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
+                        headers = Object.assign({}, response.headers);
                         if (response.headers["content-disposition"]) {
                             const info = content_disposition_1.default.parse(response.headers["content-disposition"]);
                             name = info.parameters.filename;
@@ -71,7 +73,8 @@ class Downloader {
                         etag = response.headers["etag"];
                     }
                     catch (error) {
-                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "GET", url: this.config.url, mergeSame: true, cache: "memory", Range: `bytes=${0}-${1}` }));
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "GET", url: this.config.url, mergeSame: true, cache: "memory", headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${0}-${1}` }) }));
+                        headers = Object.assign({}, response.headers);
                         if (response.headers["content-disposition"]) {
                             const info = content_disposition_1.default.parse(response.headers["content-disposition"]);
                             name = info.parameters.filename;
@@ -90,6 +93,7 @@ class Downloader {
                     key,
                     temp_dir,
                     etag,
+                    headers,
                 });
             }
             catch (error) {
@@ -200,6 +204,7 @@ class Downloader {
     }
     startPart(part_1) {
         return __awaiter(this, arguments, void 0, function* (part, data = {}) {
+            var _a;
             if (this.isDestroyed) {
                 return Promise.reject("任务已被销毁");
             }
@@ -259,7 +264,7 @@ class Downloader {
                 start += part_stat.size + 1;
             }
             const writer = fs_1.default.createWriteStream(file_path, { flags: "a" });
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${start}-${end}`, "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined }), onDownloadProgress: (value) => {
+            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${start}-${end}`, "If-Range": (_a = file_info.etag) !== null && _a !== void 0 ? _a : undefined }), onDownloadProgress: (value) => {
                     this.progress[part] = {
                         loaded: Math.round((value.progress || 0) * part_info.part_size),
                         total: part_info.part_size,

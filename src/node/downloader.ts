@@ -23,6 +23,8 @@ class Downloader {
     key: string;
     temp_dir: string;
     etag?: string;
+    headers: Record<string, string>;
+    [x: string]: any;
   }>;
 
   private request: (config: RequestChain.Config) => RequestChainResponse<any>;
@@ -96,9 +98,10 @@ class Downloader {
     /**
      * 调用一次 缓存结果
      */
-    fetchFileInfo?: () => Promise<{
+    fetchFileInfo?: (config: RequestChain.Config) => Promise<{
       name: string;
       file_size: number;
+      [x: string]: any;
     }>;
     request: (config: RequestChain.Config) => RequestChainResponse;
   }) {
@@ -118,6 +121,8 @@ class Downloader {
       options.temp_path || path.join(os.tmpdir(), "REQUEST_CHAIN");
     fs.mkdirSync(this.temp_path, { recursive: true });
 
+    let headers = {};
+
     this.get_file_info_promise = new Promise(async (resolve, reject) => {
       try {
         const [url] = this.config.url.split("?");
@@ -125,7 +130,7 @@ class Downloader {
         let etag = "";
         let file_size = 0;
         if (options.fetchFileInfo) {
-          const response = await options.fetchFileInfo();
+          const response = await options.fetchFileInfo(this.config);
           name = response.name;
           file_size = response.file_size;
         } else {
@@ -137,6 +142,10 @@ class Downloader {
               mergeSame: true,
               cache: "memory",
             });
+
+            headers = {
+              ...response.headers,
+            };
 
             if (response.headers["content-disposition"]) {
               const info = ContentDisposition.parse(
@@ -154,8 +163,15 @@ class Downloader {
               url: this.config.url,
               mergeSame: true,
               cache: "memory",
-              Range: `bytes=${0}-${1}`,
+              headers: {
+                ...this.config.headers,
+                Range: `bytes=${0}-${1}`,
+              },
             });
+
+            headers = {
+              ...response.headers,
+            };
 
             if (response.headers["content-disposition"]) {
               const info = ContentDisposition.parse(
@@ -180,6 +196,7 @@ class Downloader {
           key,
           temp_dir,
           etag,
+          headers,
         });
       } catch (error) {
         reject(error);
@@ -393,7 +410,7 @@ class Downloader {
       headers: {
         ...this.config.headers,
         Range: `bytes=${start}-${end}`,
-        "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined,
+        "If-Range": file_info.etag ?? undefined,
       },
       onDownloadProgress: (value: any) => {
         this.progress[part] = {

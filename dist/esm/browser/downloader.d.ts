@@ -36,18 +36,21 @@ declare class Downloader {
         /**
          * 调用一次 缓存结果
          */
-        fetchFileInfo?: () => Promise<{
+        fetchFileInfo?: (config: RequestChain.Config) => Promise<{
             name: string;
             file_size: number;
+            [x: string]: any;
         }>;
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
     setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
+        [x: string]: any;
         name: string;
         file_size: number;
         key: string;
         etag?: string;
+        headers: Record<string, string>;
     }>;
     getParts(): Promise<DownloaderPart[]>;
     onProgress(fn: (file: {
