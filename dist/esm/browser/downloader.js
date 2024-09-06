@@ -192,7 +192,6 @@ class Downloader {
     }
     startPart(part_1) {
         return __awaiter(this, arguments, void 0, function* (part, data = {}) {
-            var _a;
             if (this.isDestroyed) {
                 return Promise.reject("任务已被销毁");
             }
@@ -228,7 +227,9 @@ class Downloader {
                 };
                 return promise;
             }
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}`, "If-Range": (_a = file_info.etag) !== null && _a !== void 0 ? _a : undefined }), onDownloadProgress: (value) => {
+            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}`, 
+                    // "If-Range": file_info.etag ?? undefined,
+                    "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined }), onDownloadProgress: (value) => {
                     this.progress[part] = {
                         loaded: Math.round((value.progress || 0) * part_info.part_size),
                         total: part_info.part_size,
