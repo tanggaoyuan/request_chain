@@ -8,6 +8,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 import { IndexDBCache } from "./cache";
+import ContentDisposition from "content-disposition";
 const store = new IndexDBCache("downloads");
 class Downloader {
     constructor(options) {
@@ -44,14 +45,32 @@ class Downloader {
                 const [url] = this.config.url.split("?");
                 let name = url.split("/").pop() || "";
                 let file_size = 0;
+                let etag = "";
                 if (options.fetchFileInfo) {
                     const response = yield options.fetchFileInfo();
                     name = response.name;
                     file_size = response.file_size;
                 }
                 else {
-                    const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
-                    file_size = Number(response.headers["content-length"]);
+                    try {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
+                        if (response.headers["content-disposition"]) {
+                            const info = ContentDisposition.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        file_size = Number(response.headers["content-length"]);
+                        etag = response.headers["etag"];
+                    }
+                    catch (error) {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "GET", url: this.config.url, mergeSame: true, cache: "memory", Range: `bytes=${0}-${1}` }));
+                        if (response.headers["content-disposition"]) {
+                            const info = ContentDisposition.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        file_size =
+                            Number((response.headers["content-range"] || "").split("/").pop()) || 0;
+                        etag = response.headers["etag"];
+                    }
                 }
                 const key = `${name}@@${file_size}`;
                 resolve({
@@ -172,6 +191,7 @@ class Downloader {
                 return Promise.reject("任务已被销毁");
             }
             const parts = yield this.getParts();
+            const file_info = yield this.getFileInfo();
             const part_info = parts[part];
             if (["done", "pending", "stop"].includes(this.status[part])) {
                 const task = this.tasks[part] || {
@@ -202,7 +222,7 @@ class Downloader {
                 };
                 return promise;
             }
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}` }), onDownloadProgress: (value) => {
+            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}`, "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined }), onDownloadProgress: (value) => {
                     this.progress[part] = {
                         loaded: Math.round((value.progress || 0) * part_info.part_size),
                         total: part_info.part_size,

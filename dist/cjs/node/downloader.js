@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const content_disposition_1 = __importDefault(require("content-disposition"));
 class Downloader {
     constructor(options) {
         this.tasks = [];
@@ -52,6 +53,7 @@ class Downloader {
             try {
                 const [url] = this.config.url.split("?");
                 let name = url.split("/").pop() || "";
+                let etag = "";
                 let file_size = 0;
                 if (options.fetchFileInfo) {
                     const response = yield options.fetchFileInfo();
@@ -59,8 +61,25 @@ class Downloader {
                     file_size = response.file_size;
                 }
                 else {
-                    const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
-                    file_size = Number(response.headers["content-length"]);
+                    try {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
+                        if (response.headers["content-disposition"]) {
+                            const info = content_disposition_1.default.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        file_size = Number(response.headers["content-length"]);
+                        etag = response.headers["etag"];
+                    }
+                    catch (error) {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "GET", url: this.config.url, mergeSame: true, cache: "memory", Range: `bytes=${0}-${1}` }));
+                        if (response.headers["content-disposition"]) {
+                            const info = content_disposition_1.default.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        file_size =
+                            Number((response.headers["content-range"] || "").split("/").pop()) || 0;
+                        etag = response.headers["etag"];
+                    }
                 }
                 const key = `${name}@@${file_size}`;
                 const temp_dir = path_1.default.join(this.temp_path, key);
@@ -70,6 +89,7 @@ class Downloader {
                     name,
                     key,
                     temp_dir,
+                    etag,
                 });
             }
             catch (error) {
@@ -239,7 +259,7 @@ class Downloader {
                 start += part_stat.size + 1;
             }
             const writer = fs_1.default.createWriteStream(file_path, { flags: "a" });
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${start}-${end}` }), onDownloadProgress: (value) => {
+            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${start}-${end}`, "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined }), onDownloadProgress: (value) => {
                     this.progress[part] = {
                         loaded: Math.round((value.progress || 0) * part_info.part_size),
                         total: part_info.part_size,

@@ -47,6 +47,7 @@ declare class Downloader {
         name: string;
         file_size: number;
         key: string;
+        etag?: string;
     }>;
     getParts(): Promise<DownloaderPart[]>;
     onProgress(fn: (file: {
