@@ -410,8 +410,7 @@ class Downloader {
       headers: {
         ...this.config.headers,
         Range: `bytes=${start}-${end}`,
-        // "If-Range": file_info.etag ?? undefined,
-        "If-Range": file_info.etag ? `"${file_info.etag}"` : undefined,
+        "If-Range": file_info.etag ?? undefined,
       },
       onDownloadProgress: (value: any) => {
         this.progress[part] = {
