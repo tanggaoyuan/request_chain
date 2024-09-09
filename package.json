@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc&tsc -p ./tsconfig-esm.json"
+    "build": "tsc&tsc -p ./tsconfig.node.json"
   },
   "author": "",
   "license": "ISC",
@@ -25,18 +25,28 @@
   "exports": {
     "./core": {
       "import": "./dist/esm/core/index.js",
-      "require": "./dist/cjs/core/index.js",
-      "types": "./dist/esm/core/index.d.ts"
+      "require": "./dist/cjs/core/index.js"
     },
     "./node": {
       "import": "./dist/esm/node/index.js",
-      "require": "./dist/cjs/node/index.js",
-      "types": "./dist/cjs/node/index.d.ts"
+      "require": "./dist/cjs/node/index.js"
     },
     "./browser": {
       "import": "./dist/esm/browser/index.js",
-      "require": "./dist/cjs/browser/index.js",
-      "types": "./dist/esm/browser/index.d.ts"
+      "require": "./dist/cjs/browser/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "core": [
+        "./dist/esm/core/index.d.ts"
+      ],
+      "node": [
+        "./dist/cjs/node/index.d.ts"
+      ],
+      "browser": [
+        "./dist/esm/browser/index.d.ts"
+      ]
     }
   }
 }
