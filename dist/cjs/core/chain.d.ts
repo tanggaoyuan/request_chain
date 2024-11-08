@@ -3,15 +3,25 @@ export declare class RequestChainResponse<T = any> implements Promise<RequestCha
     private config;
     private readonly promise;
     private readonly abortController;
-    private chain;
-    constructor(config: RequestChain.Config, chain: RequestChain);
+    private intercept_request;
+    private intercept_response;
+    private skipGlobalInterceptFlag;
+    private options;
+    constructor(config: RequestChain.Config, options: RequestChain.Options & {
+        memory: Cache;
+    });
     then<TResult1 = RequestChain.Response<T>, TResult2 = never>(onfulfilled?: (value: RequestChain.Response<T>) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>;
     catch<TResult = never>(onrejected?: (reason: any) => TResult | PromiseLike<TResult>): Promise<RequestChain.Response<T> | TResult>;
     finally(onfinally?: () => void): Promise<RequestChain.Response<T>>;
     /**
-     * 重建请求类
+     * 重建当前请求
+     * @param config
+     * @returns
      */
-    rebuild(config?: Partial<RequestChain.Config>, mix?: boolean): RequestChainResponse<T>;
+    rebuild(config?: RequestChain.Config): RequestChainResponse<any>;
+    skipGlobalIntercept(): this;
+    handleRequest(fn: (config: RequestChain.Config) => void): this;
+    handleResponse(fn: (response: RequestChain.Response<T>) => void): this;
     setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     setHeaders(headers: RequestChain.Headers, mix?: boolean): this;
     headerFromData(): this;
@@ -25,7 +35,7 @@ export declare class RequestChainResponse<T = any> implements Promise<RequestCha
     enableMergeSame(): this;
     disableMergeSame(): this;
     timeout(time: number): this;
-    abort(): this;
+    abort(reason?: any): this;
     replay(count: number): this;
     enableAlert(): this;
     disableAlert(): this;
@@ -38,9 +48,10 @@ export declare class RequestChainResponse<T = any> implements Promise<RequestCha
 declare class RequestChain {
     private readonly config;
     private readonly interceptor?;
-    private readonly localCache?;
+    private readonly local?;
     private readonly memoryCache;
-    constructor(config: RequestChain.BaseConfig, interceptor?: RequestChain.Interceptor);
+    private _request;
+    constructor(options: RequestChain.Options, config: RequestChain.BaseConfig);
     setMemoryCache(key: string, data: any, expires?: number): this;
     getMemoryCache(key: string): any;
     deleteMemoryCache(key: string): this;
@@ -56,20 +67,22 @@ declare class RequestChain {
     delete<T = any>(url: string, params?: Record<string, string | number>): RequestChainResponse<T>;
 }
 declare namespace RequestChain {
-    type RequestFn = (config: Omit<Config, "cache" | "request"> & {
+    type RequestFn = (config: Config & {
         signal: AbortController["signal"];
-    }, chain: RequestResponse) => Promise<Response<any>>;
+    }, chain: RequestChainResponse) => Promise<Response<any>>;
     interface BaseConfig {
         baseUrl?: string;
         headers?: Headers;
-        request: RequestFn;
-        localCache?: Cache;
         mergeSame?: boolean;
         replay?: number;
         alert?: boolean;
         timeout?: number;
     }
-    type RequestResponse = RequestChainResponse;
+    interface Options {
+        request: RequestFn;
+        local?: Cache;
+        interceptor?: RequestChain.InterceptorFn;
+    }
     interface Headers {
         Authorization?: string;
         "User-Agent"?: string;
@@ -83,7 +96,6 @@ declare namespace RequestChain {
         data?: any;
         method: "GET" | "POST" | "PUT" | "DELETE" | "HEAD";
         url: string;
-        interceptor?: Interceptor;
         cache?: "memory" | "local";
         expires?: number;
         baseUrl?: string;
@@ -111,15 +123,18 @@ declare namespace RequestChain {
         status: number;
         statusText: string;
         headers: {
+            "content-encoding"?: string;
+            "content-type"?: string;
+            "content-range"?: string;
+            date?: string;
+            connection?: string;
+            "content-disposition"?: string;
+            "content-length"?: string;
+            etag?: string;
             [x: string]: any;
         };
     }
-    interface Interceptor<R extends RequestChain.Response = RequestChain.Response> {
-        handleRequest?: (chain: RequestChainResponse<any>) => void | Promise<void>;
-        handleResonse?: (response: R, config: RequestChain.Config) => Promise<R> | void;
-        handleError?: (error: any, chain: RequestChainResponse<any>) => Promise<R | void> | void;
-        handleAlert?: (error: any, config: RequestChain.Config) => void;
-    }
+    type InterceptorFn = (config: RequestChain.Config, chain: RequestChainResponse) => void | Promise<void> | ((response: Response, error?: Error) => void | Response | Promise<Response | void>) | Promise<(response: Response, error?: Error) => void | Response | Promise<Response | void>>;
 }
 export default RequestChain;
 //# sourceMappingURL=chain.d.ts.map

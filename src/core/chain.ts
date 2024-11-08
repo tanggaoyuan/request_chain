@@ -9,22 +9,40 @@ export class RequestChainResponse<T = any>
   private readonly promise: Promise<RequestChain.Response<T>>;
 
   private readonly abortController: AbortController;
-  private chain: RequestChain;
+  private intercept_request: Array<
+    (config: RequestChain.Config) => Promise<void> | void
+  > = [];
+  private intercept_response: Array<
+    (response: RequestChain.Response<T>) => Promise<void> | void
+  > = [];
+  private skipGlobalInterceptFlag: boolean = false;
+  private options: RequestChain.Options & { memory: Cache };
 
-  constructor(config: RequestChain.Config, chain: RequestChain) {
+  constructor(
+    config: RequestChain.Config,
+    options: RequestChain.Options & { memory: Cache }
+  ) {
     this.config = config;
-    const request = config.request;
+    this.options = options;
+    const request = options.request;
     this.abortController = new AbortController();
-    this.chain = chain;
     this.promise = new Promise<any>((resolve, reject) => {
       setTimeout(async () => {
         try {
-          const interceptor = this.config.interceptor ?? {};
-          const { handleRequest, handleResonse, handleError, handleAlert } =
-            interceptor;
+          for (const handle of this.intercept_request) {
+            await handle(this.config);
+          }
 
-          if (handleRequest) {
-            await handleRequest(this);
+          let handleResponse: (
+            response: RequestChain.Response,
+            error?: Error
+          ) => any;
+
+          if (options.interceptor && !this.skipGlobalInterceptFlag) {
+            handleResponse = (await options.interceptor(
+              this.config,
+              this
+            )) as any;
           }
 
           let { url, baseUrl = "", mergeSame, cache, expires } = this.config;
@@ -50,7 +68,7 @@ export class RequestChainResponse<T = any>
             md5.append(key);
             key = md5.end();
 
-            const cacheData = chain.getMemoryCache(key);
+            const cacheData = options.memory.get(key);
 
             if (cacheData) {
               if (cacheData.then) {
@@ -61,14 +79,30 @@ export class RequestChainResponse<T = any>
               return;
             }
 
-            if (cache === "local") {
-              const cacheData = chain.getLocalCache(key);
+            if (cache === "local" && options.local) {
+              let cacheData = options.local.get(key);
+
               if (cacheData) {
+                let result = cacheData;
+
                 if (typeof cacheData.then === "function") {
-                  cacheData.then(resolve);
-                } else {
-                  resolve(cacheData);
+                  result = await cacheData;
                 }
+
+                for (const handle of this.intercept_response) {
+                  await handle(result);
+                }
+
+                if (handleResponse && !this.skipGlobalInterceptFlag) {
+                  const response = await handleResponse(result);
+                  if (response) {
+                    resolve(response);
+                    return;
+                  }
+                }
+
+                resolve(result);
+
                 return;
               }
             }
@@ -86,21 +120,14 @@ export class RequestChainResponse<T = any>
                 this
               );
 
-              if (handleResonse) {
-                const result = await handleResonse(response, this.config);
-                if (result) {
-                  return result;
-                }
-              }
-
               if (!cache) {
                 setTimeout(() => {
-                  chain.deleteMemoryCache(key);
+                  options.memory.delete(key);
                 }, 0);
               }
 
-              if (cache === "local") {
-                chain.setLocalCache(
+              if (cache === "local" && options.local) {
+                options.local.set(
                   key,
                   {
                     ...response,
@@ -111,32 +138,48 @@ export class RequestChainResponse<T = any>
                 );
               }
 
+              for (const handle of this.intercept_response) {
+                await handle(response);
+              }
+
+              if (handleResponse && !this.skipGlobalInterceptFlag) {
+                const result = await handleResponse(response);
+                if (result) {
+                  return result;
+                }
+              }
+
               return response;
             } catch (error) {
+              options.memory.delete(key);
+
+              if (this.abortController.signal.aborted) {
+                error.message =
+                  this.abortController.signal.reason || "canceled";
+                return Promise.reject(error);
+              }
+
               if (this.config.replay && this.config.replay > 0) {
                 this.config.replay--;
                 return createRequest();
               }
 
-              chain.deleteMemoryCache(key);
-
-              if (handleError) {
-                try {
-                  const result = await handleError(error, this);
-                  if (result) {
-                    return result;
+              if (handleResponse && !this.skipGlobalInterceptFlag) {
+                const result = await handleResponse(error.response, error);
+                if (result) {
+                  if (cache === "local" && options.local) {
+                    options.local.set(
+                      key,
+                      {
+                        ...error.response,
+                        request: undefined,
+                        Socket: undefined,
+                      },
+                      expires
+                    );
                   }
-                } catch (error) {
-                  if (config.alert) {
-                    handleAlert && handleAlert(error, config);
-                  }
-                  reject(error);
-                  return;
+                  return result;
                 }
-              }
-
-              if (config.alert) {
-                handleAlert && handleAlert(error, config);
               }
 
               return Promise.reject(error);
@@ -146,8 +189,9 @@ export class RequestChainResponse<T = any>
           const promise = createRequest();
 
           if (mergeSame || cache) {
-            chain.setMemoryCache(key, promise);
+            options.memory.set(key, promise, expires);
           }
+
           promise.then(resolve, reject);
         } catch (error) {
           reject(error);
@@ -176,22 +220,37 @@ export class RequestChainResponse<T = any>
   }
 
   /**
-   * 重建请求类
+   * 重建当前请求
+   * @param config
+   * @returns
    */
-  public rebuild(config?: Partial<RequestChain.Config>, mix = true) {
-    return new RequestChainResponse<T>(
-      mix
-        ? {
-            ...this.config,
-            ...config,
-          }
-        : {
-            url: this.config.url,
-            method: this.config.method,
-            ...config,
-          },
-      this.chain
+  public rebuild(config?: RequestChain.Config) {
+    return new RequestChainResponse(
+      {
+        ...this.config,
+        ...config,
+        headers: {
+          ...this.config.headers,
+          ...config.headers,
+        },
+      },
+      this.options
     );
+  }
+
+  public skipGlobalIntercept() {
+    this.skipGlobalInterceptFlag = true;
+    return this;
+  }
+
+  public handleRequest(fn: (config: RequestChain.Config) => void) {
+    this.intercept_request.push(fn);
+    return this;
+  }
+
+  public handleResponse(fn: (response: RequestChain.Response<T>) => void) {
+    this.intercept_response.push(fn);
+    return this;
   }
 
   public setConfig(config: Partial<RequestChain.Config>, mix = true) {
@@ -263,9 +322,9 @@ export class RequestChainResponse<T = any>
     return this;
   }
 
-  public abort() {
+  public abort(reason?: any) {
     if (this.abortController) {
-      this.abortController.abort();
+      this.abortController.abort(reason);
     }
     return this;
   }
@@ -353,22 +412,17 @@ export class RequestChainResponse<T = any>
 
 class RequestChain {
   private readonly config: RequestChain.BaseConfig;
-  private readonly interceptor?: RequestChain.Interceptor;
-  private readonly localCache?: Cache;
-
+  private readonly interceptor?: RequestChain.InterceptorFn;
+  private readonly local?: Cache;
   private readonly memoryCache;
+  private _request: RequestChain.RequestFn;
 
-  constructor(
-    config: RequestChain.BaseConfig,
-    interceptor?: RequestChain.Interceptor
-  ) {
-    this.config = {
-      ...config,
-      localCache: undefined,
-    };
-    this.localCache = config.localCache;
-    this.interceptor = interceptor;
+  constructor(options: RequestChain.Options, config: RequestChain.BaseConfig) {
+    this.config = config;
+    this.local = options.local;
+    this.interceptor = options.interceptor;
     this.memoryCache = new MemoryCache();
+    this._request = options.request;
   }
 
   public setMemoryCache(key: string, data: any, expires?: number) {
@@ -386,25 +440,25 @@ class RequestChain {
   }
 
   public getLocalCache(key: string) {
-    if (!this.localCache) {
+    if (!this.local) {
       return null;
     }
-    return this.localCache.get(key);
+    return this.local.get(key);
   }
 
   public setLocalCache(key: string, data: any, expires?: number) {
-    if (!this.localCache) {
+    if (!this.local) {
       return this;
     }
-    this.localCache.set(key, data, expires);
+    this.local.set(key, data, expires);
     return this;
   }
 
   public deleteLocalCache(key: string) {
-    if (!this.localCache) {
+    if (!this.local) {
       return this;
     }
-    this.localCache.delete(key);
+    this.local.delete(key);
     return this;
   }
 
@@ -426,13 +480,17 @@ class RequestChain {
         timeout: 10000,
         ...this.config,
         ...config,
-        interceptor: {
-          ...this.interceptor,
-          ...config.interceptor,
+        headers: {
+          ...this.config?.headers,
+          ...config.headers,
         },
-        request: this.config.request,
       },
-      this
+      {
+        local: this.local,
+        memory: this.memoryCache,
+        interceptor: this.interceptor,
+        request: this._request,
+      }
     );
   }
 
@@ -484,24 +542,26 @@ class RequestChain {
 
 namespace RequestChain {
   export type RequestFn = (
-    config: Omit<Config, "cache" | "request"> & {
+    config: Config & {
       signal: AbortController["signal"];
     },
-    chain: RequestResponse
+    chain: RequestChainResponse
   ) => Promise<Response<any>>;
 
   export interface BaseConfig {
     baseUrl?: string;
     headers?: Headers;
-    request: RequestFn;
-    localCache?: Cache;
     mergeSame?: boolean;
     replay?: number;
     alert?: boolean;
     timeout?: number; // 毫秒
   }
 
-  export type RequestResponse = RequestChainResponse;
+  export interface Options {
+    request: RequestFn;
+    local?: Cache;
+    interceptor?: RequestChain.InterceptorFn;
+  }
 
   export interface Headers {
     Authorization?: string;
@@ -521,7 +581,6 @@ namespace RequestChain {
     data?: any;
     method: "GET" | "POST" | "PUT" | "DELETE" | "HEAD";
     url: string;
-    interceptor?: Interceptor;
     cache?: "memory" | "local";
     expires?: number;
     baseUrl?: string;
@@ -550,24 +609,34 @@ namespace RequestChain {
     status: number;
     statusText: string;
     headers: {
+      "content-encoding"?: string;
+      "content-type"?: string;
+      "content-range"?: string;
+      date?: string;
+      connection?: string;
+      "content-disposition"?: string;
+      "content-length"?: string;
+      etag?: string;
       [x: string]: any;
     };
   }
 
-  export interface Interceptor<
-    R extends RequestChain.Response = RequestChain.Response
-  > {
-    handleRequest?: (chain: RequestChainResponse<any>) => void | Promise<void>;
-    handleResonse?: (
-      response: R,
-      config: RequestChain.Config
-    ) => Promise<R> | void;
-    handleError?: (
-      error: any,
-      chain: RequestChainResponse<any>
-    ) => Promise<R | void> | void;
-    handleAlert?: (error: any, config: RequestChain.Config) => void;
-  }
+  export type InterceptorFn = (
+    config: RequestChain.Config,
+    chain: RequestChainResponse
+  ) =>
+    | void
+    | Promise<void>
+    | ((
+        response: Response,
+        error?: Error
+      ) => void | Response | Promise<Response | void>)
+    | Promise<
+        (
+          response: Response,
+          error?: Error
+        ) => void | Response | Promise<Response | void>
+      >;
 }
 
 export default RequestChain;

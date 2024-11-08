@@ -16,5 +16,6 @@ export declare class LocalCache implements Cache {
         data: any;
     } | undefined>;
     write(): boolean;
+    clearAll(): void;
 }
 //# sourceMappingURL=cache.d.ts.map

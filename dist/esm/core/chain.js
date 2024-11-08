@@ -12,24 +12,29 @@ import qs from "qs";
 import { MemoryCache } from "./cache";
 import SparkMd5 from "spark-md5";
 export class RequestChainResponse {
-    constructor(config, chain) {
+    constructor(config, options) {
+        this.intercept_request = [];
+        this.intercept_response = [];
+        this.skipGlobalInterceptFlag = false;
         this[_a] = "RequestChainResponse";
         this.config = config;
-        const request = config.request;
+        this.options = options;
+        const request = options.request;
         this.abortController = new AbortController();
-        this.chain = chain;
         this.promise = new Promise((resolve, reject) => {
             setTimeout(() => __awaiter(this, void 0, void 0, function* () {
-                var _b, _c;
+                var _b;
                 try {
-                    const interceptor = (_b = this.config.interceptor) !== null && _b !== void 0 ? _b : {};
-                    const { handleRequest, handleResonse, handleError, handleAlert } = interceptor;
-                    if (handleRequest) {
-                        yield handleRequest(this);
+                    for (const handle of this.intercept_request) {
+                        yield handle(this.config);
+                    }
+                    let handleResponse;
+                    if (options.interceptor && !this.skipGlobalInterceptFlag) {
+                        handleResponse = (yield options.interceptor(this.config, this));
                     }
                     let { url, baseUrl = "", mergeSame, cache, expires } = this.config;
                     url = url.startsWith("http") ? url : `${baseUrl}${this.config.url}`;
-                    const [host, query] = (_c = url.split("?")) !== null && _c !== void 0 ? _c : ["", ""];
+                    const [host, query] = (_b = url.split("?")) !== null && _b !== void 0 ? _b : ["", ""];
                     const urlParams = Object.assign(Object.assign({}, qs.parse(query)), this.config.params);
                     url = host + "?" + qs.stringify(urlParams);
                     let key = "";
@@ -38,7 +43,7 @@ export class RequestChainResponse {
                         const md5 = new SparkMd5();
                         md5.append(key);
                         key = md5.end();
-                        const cacheData = chain.getMemoryCache(key);
+                        const cacheData = options.memory.get(key);
                         if (cacheData) {
                             if (cacheData.then) {
                                 cacheData.then(resolve, reject);
@@ -48,15 +53,24 @@ export class RequestChainResponse {
                             }
                             return;
                         }
-                        if (cache === "local") {
-                            const cacheData = chain.getLocalCache(key);
+                        if (cache === "local" && options.local) {
+                            let cacheData = options.local.get(key);
                             if (cacheData) {
+                                let result = cacheData;
                                 if (typeof cacheData.then === "function") {
-                                    cacheData.then(resolve);
+                                    result = yield cacheData;
                                 }
-                                else {
-                                    resolve(cacheData);
+                                for (const handle of this.intercept_response) {
+                                    yield handle(result);
                                 }
+                                if (handleResponse && !this.skipGlobalInterceptFlag) {
+                                    const response = yield handleResponse(result);
+                                    if (response) {
+                                        resolve(response);
+                                        return;
+                                    }
+                                }
+                                resolve(result);
                                 return;
                             }
                         }
@@ -64,52 +78,51 @@ export class RequestChainResponse {
                     const createRequest = () => __awaiter(this, void 0, void 0, function* () {
                         try {
                             const response = yield request(Object.assign(Object.assign({ signal: this.abortController.signal }, this.config), { url, params: undefined }), this);
-                            if (handleResonse) {
-                                const result = yield handleResonse(response, this.config);
+                            if (!cache) {
+                                setTimeout(() => {
+                                    options.memory.delete(key);
+                                }, 0);
+                            }
+                            if (cache === "local" && options.local) {
+                                options.local.set(key, Object.assign(Object.assign({}, response), { request: undefined, Socket: undefined }), expires);
+                            }
+                            for (const handle of this.intercept_response) {
+                                yield handle(response);
+                            }
+                            if (handleResponse && !this.skipGlobalInterceptFlag) {
+                                const result = yield handleResponse(response);
                                 if (result) {
                                     return result;
                                 }
                             }
-                            if (!cache) {
-                                setTimeout(() => {
-                                    chain.deleteMemoryCache(key);
-                                }, 0);
-                            }
-                            if (cache === "local") {
-                                chain.setLocalCache(key, Object.assign(Object.assign({}, response), { request: undefined, Socket: undefined }), expires);
-                            }
                             return response;
                         }
                         catch (error) {
+                            options.memory.delete(key);
+                            if (this.abortController.signal.aborted) {
+                                error.message =
+                                    this.abortController.signal.reason || "canceled";
+                                return Promise.reject(error);
+                            }
                             if (this.config.replay && this.config.replay > 0) {
                                 this.config.replay--;
                                 return createRequest();
                             }
-                            chain.deleteMemoryCache(key);
-                            if (handleError) {
-                                try {
-                                    const result = yield handleError(error, this);
-                                    if (result) {
-                                        return result;
+                            if (handleResponse && !this.skipGlobalInterceptFlag) {
+                                const result = yield handleResponse(error.response, error);
+                                if (result) {
+                                    if (cache === "local" && options.local) {
+                                        options.local.set(key, Object.assign(Object.assign({}, error.response), { request: undefined, Socket: undefined }), expires);
                                     }
+                                    return result;
                                 }
-                                catch (error) {
-                                    if (config.alert) {
-                                        handleAlert && handleAlert(error, config);
-                                    }
-                                    reject(error);
-                                    return;
-                                }
-                            }
-                            if (config.alert) {
-                                handleAlert && handleAlert(error, config);
                             }
                             return Promise.reject(error);
                         }
                     });
                     const promise = createRequest();
                     if (mergeSame || cache) {
-                        chain.setMemoryCache(key, promise);
+                        options.memory.set(key, promise, expires);
                     }
                     promise.then(resolve, reject);
                 }
@@ -129,11 +142,24 @@ export class RequestChainResponse {
         return this.promise.finally(onfinally);
     }
     /**
-     * 重建请求类
+     * 重建当前请求
+     * @param config
+     * @returns
      */
-    rebuild(config, mix = true) {
-        return new RequestChainResponse(mix
-            ? Object.assign(Object.assign({}, this.config), config) : Object.assign({ url: this.config.url, method: this.config.method }, config), this.chain);
+    rebuild(config) {
+        return new RequestChainResponse(Object.assign(Object.assign(Object.assign({}, this.config), config), { headers: Object.assign(Object.assign({}, this.config.headers), config.headers) }), this.options);
+    }
+    skipGlobalIntercept() {
+        this.skipGlobalInterceptFlag = true;
+        return this;
+    }
+    handleRequest(fn) {
+        this.intercept_request.push(fn);
+        return this;
+    }
+    handleResponse(fn) {
+        this.intercept_response.push(fn);
+        return this;
     }
     setConfig(config, mix = true) {
         this.config = mix
@@ -181,9 +207,9 @@ export class RequestChainResponse {
         this.config.timeout = time;
         return this;
     }
-    abort() {
+    abort(reason) {
         if (this.abortController) {
-            this.abortController.abort();
+            this.abortController.abort(reason);
         }
         return this;
     }
@@ -256,11 +282,12 @@ export class RequestChainResponse {
 }
 _a = Symbol.toStringTag;
 class RequestChain {
-    constructor(config, interceptor) {
-        this.config = Object.assign(Object.assign({}, config), { localCache: undefined });
-        this.localCache = config.localCache;
-        this.interceptor = interceptor;
+    constructor(options, config) {
+        this.config = config;
+        this.local = options.local;
+        this.interceptor = options.interceptor;
         this.memoryCache = new MemoryCache();
+        this._request = options.request;
     }
     setMemoryCache(key, data, expires) {
         this.memoryCache.set(key, data, expires);
@@ -274,23 +301,23 @@ class RequestChain {
         return this;
     }
     getLocalCache(key) {
-        if (!this.localCache) {
+        if (!this.local) {
             return null;
         }
-        return this.localCache.get(key);
+        return this.local.get(key);
     }
     setLocalCache(key, data, expires) {
-        if (!this.localCache) {
+        if (!this.local) {
             return this;
         }
-        this.localCache.set(key, data, expires);
+        this.local.set(key, data, expires);
         return this;
     }
     deleteLocalCache(key) {
-        if (!this.localCache) {
+        if (!this.local) {
             return this;
         }
-        this.localCache.delete(key);
+        this.local.delete(key);
         return this;
     }
     getMobileUserAgent(type = "Android") {
@@ -304,7 +331,13 @@ class RequestChain {
             : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1.2 Safari/605.1.15";
     }
     request(config) {
-        return new RequestChainResponse(Object.assign(Object.assign(Object.assign({ timeout: 10000 }, this.config), config), { interceptor: Object.assign(Object.assign({}, this.interceptor), config.interceptor), request: this.config.request }), this);
+        var _b;
+        return new RequestChainResponse(Object.assign(Object.assign(Object.assign({ timeout: 10000 }, this.config), config), { headers: Object.assign(Object.assign({}, (_b = this.config) === null || _b === void 0 ? void 0 : _b.headers), config.headers) }), {
+            local: this.local,
+            memory: this.memoryCache,
+            interceptor: this.interceptor,
+            request: this._request,
+        });
     }
     get(url, params) {
         return this.request({

@@ -70,7 +70,13 @@ export class LocalCache implements Cache {
       fs.writeFileSync(this.path, JSON.stringify(this.store), "utf-8");
       return true;
     } catch (error) {
+      console.log("write", error);
       return false;
     }
+  }
+
+  public clearAll() {
+    this.store = {};
+    this.write();
   }
 }

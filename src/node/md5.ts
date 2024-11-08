@@ -2,7 +2,7 @@ import { Worker } from "worker_threads";
 import crypto from "crypto";
 import path from "path";
 
-export const getMd5Thread = (chunk: Buffer) => {
+export const getMd5Thread = (chunk: Buffer | string) => {
   return new Promise<string>((resolve, reject) => {
     const worker = new Worker(path.resolve(__dirname, "md5-worker.js"));
     worker.postMessage(chunk);
@@ -22,7 +22,7 @@ export const getMd5Thread = (chunk: Buffer) => {
   });
 };
 
-export const getMd5 = (chunk: Buffer) => {
+export const getMd5 = (chunk: Buffer | string) => {
   return new Promise<string>((resolve, reject) => {
     try {
       const hash = crypto.createHash("md5");

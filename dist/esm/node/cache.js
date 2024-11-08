@@ -62,7 +62,12 @@ export class LocalCache {
             return true;
         }
         catch (error) {
+            console.log("write", error);
             return false;
         }
+    }
+    clearAll() {
+        this.store = {};
+        this.write();
     }
 }
