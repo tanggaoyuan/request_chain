@@ -1,4 +1,6 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
+import fs from "fs";
+import { PassThrough } from "stream";
 export interface DownloaderPart {
     start: number;
     end: number;
@@ -8,47 +10,52 @@ export interface DownloaderPart {
     part_index: number;
     part_size: number;
     part_count: number;
+    temp_dir: string;
+    temp_path: string;
 }
 declare class Downloader {
     private get_parts_promise?;
+    private get_file_info_promise?;
     private request;
     private tasks;
-    private name?;
     private part_size?;
-    private status;
-    private downloader?;
+    status: Array<"pending" | "wait" | "done" | "stop">;
+    private downloader;
     private config;
     private events;
     private progress;
-    private concurrent;
-    isDestroyed: boolean;
-    dir_path: string;
+    temp_path: string;
     constructor(options: {
         url: string;
         /**
-         * 保存的文件名称
+         * 缓存路劲
          */
-        name?: string;
-        /**
-         * 保存的文件夹路劲
-         */
-        dir_path: string;
+        temp_path?: string;
         /**
          * 按大小切片
          */
         part_size?: number;
-        concurrent?: number;
+        /**
+         * 调用一次 缓存结果
+         */
+        fetchFileInfo?: (config: RequestChain.Config) => Promise<{
+            name: string;
+            file_size: number;
+            mine_type?: string;
+            [x: string]: any;
+        }>;
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
-    createDir(filePath: string): void;
     setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
-        total: number;
-        type: any;
-        lastModified: any;
-        originalName: string;
+        [x: string]: any;
         name: string;
+        file_size: number;
         key: string;
+        temp_dir: string;
+        etag?: string;
+        mine_type: string;
+        headers: RequestChain.Response["headers"];
     }>;
     getParts(): Promise<DownloaderPart[]>;
     onProgress(fn: (file: {
@@ -61,58 +68,75 @@ declare class Downloader {
         total: number;
         progress: number;
         name: string;
-    }>) => void): void;
+    }>) => void): () => void;
+    private oldLoaded?;
     private notifyProgress;
-    onStatus(fn: (status: Array<"pending" | "pause" | "done" | "stop">, part_index: number) => void): void;
+    onStatus(fn: (status: Array<"pending" | "wait" | "done" | "stop">, part_index: number) => void): () => void;
     private notifyStatus;
-    startPart(part: number, data?: Record<string, any>): Promise<Buffer>;
     /**
-     * part 暂停当前切片任务,所有任务结束时，upload处于等待中
-     * 下载大小小于size时,终止请求
+     *
+     * @param part
+     * @param options
+     * @returns
      */
-    pausePart(part: number, size?: number): void;
+    startPart(part: number, options?: {
+        /**
+         * 每次执行下载preloaded大小后停止，useCache=true时从缓存大小开始追加,useCache = false时从0开始
+         */
+        preloaded?: number;
+        /**
+         * 是否使用缓存
+         */
+        useCache?: boolean;
+    }): Promise<PassThrough>;
+    waitPartStream(stream: PassThrough): Promise<void>;
+    waitPartDone(part: number): Promise<void>;
     /**
-     * 停止当前任务，所有任务结束时，upload返回结果
+     * part 暂停当前切片任务,所有任务结束时，finish处于等待中
+     */
+    pausePart(part: number): void;
+    /**
+     * 停止当前任务，所有任务结束时，finish返回结果
      */
     stopPart(part: number): void;
-    /**
-     * 通过part下载,该part将进入完成状态
-     */
-    skipPart(part: number, data: Buffer): Promise<Buffer>;
     /**
      * 上传速度监听
      */
     private speedRef;
     private speedsize;
-    onSpeed(fn: (speed: number, parts: Array<number>) => void): void;
+    onSpeed(fn: (speed: number, parts: Array<number>) => void): () => void;
+    /**
+     * 等待所有任务结束，返回状态
+     */
+    end(): Promise<("pending" | "done" | "stop" | "wait")[]>;
     /**
      * 等待所有任务结束，返回结果
      */
     finishing(): Promise<({
-        status: "done";
-        data: Buffer;
-    } | {
         status: "stop";
-        error: any;
+    } | {
+        status: "done";
+        stream: PassThrough;
     })[]>;
     /**
      * 开始下载
      */
-    download(): Promise<({
-        status: "done";
-        data: Buffer;
-    } | {
+    download(concurrent?: number): Promise<({
         status: "stop";
-        error: any;
+    } | {
+        status: "done";
+        stream: PassThrough;
     })[]>;
-    save(save_path?: string): Promise<boolean>;
     /**
-     * 删除下载的切片
+     *
+     * @param save_path 可为文件夹 也可为具体文件
+     * @returns
      */
-    deleteDownloadFile(): Promise<unknown>;
+    save(save_path: string): Promise<fs.WriteStream>;
     /**
-     * 销毁实例 释放内存,清空下载缓存
+     * 删除下载的缓存
      */
-    destroyed(): Promise<void>;
+    deleteDownloadTemp(): Promise<unknown>;
 }
 export default Downloader;
+//# sourceMappingURL=downloader.d.ts.map

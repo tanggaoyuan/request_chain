@@ -14,6 +14,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
+const content_disposition_1 = __importDefault(require("content-disposition"));
+const stream_1 = require("stream");
+const md5_1 = require("./md5");
 class Downloader {
     constructor(options) {
         this.tasks = [];
@@ -25,12 +29,6 @@ class Downloader {
         };
         this.events = new Map();
         this.progress = [];
-        this.concurrent = 1;
-        this.isDestroyed = false;
-        /**
-         * 上传速度监听
-         */
-        this.speedRef = 0;
         this.speedsize = [];
         const callback = [null, null];
         this.downloader = {
@@ -40,33 +38,76 @@ class Downloader {
                 callback[1] = reject;
             }),
         };
-        this.concurrent = options.concurrent || 1;
         this.request = options.request;
         this.config.url = options.url;
-        this.name = options.name;
         this.part_size = options.part_size;
-        this.dir_path = options.dir_path;
-        this.getFileInfo().then((response) => {
-            const strs = response.name.split(".");
-            strs.pop();
-            const paths = [options.dir_path, strs.join("_")];
-            const pathname = path_1.default.join(...paths);
-            this.createDir(pathname);
-        });
+        this.temp_path =
+            options.temp_path || path_1.default.join(os_1.default.tmpdir(), "REQUEST_CHAIN");
+        fs_1.default.mkdirSync(this.temp_path, { recursive: true });
+        let headers = {};
+        this.get_file_info_promise = new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const [url] = this.config.url.split("?");
+                let name = url.split("/").pop() || "";
+                let etag = "";
+                let file_size = 0;
+                let mine_type = "";
+                if (options.fetchFileInfo) {
+                    const response = yield options.fetchFileInfo(this.config);
+                    name = response.name;
+                    file_size = response.file_size;
+                    mine_type = response.mine_type || "";
+                }
+                else {
+                    try {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "local" }));
+                        headers = Object.assign({}, response.headers);
+                        if (response.headers["content-disposition"]) {
+                            const info = content_disposition_1.default.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        mine_type = response.headers["content-type"] || "";
+                        file_size = Number(response.headers["content-length"]);
+                        etag = response.headers["etag"];
+                    }
+                    catch (error) {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "GET", url: this.config.url, mergeSame: true, headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${0}-${1}` }) }));
+                        headers = Object.assign({}, response.headers);
+                        if (response.headers["content-disposition"]) {
+                            const info = content_disposition_1.default.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        mine_type = response.headers["content-type"] || "";
+                        file_size =
+                            Number((response.headers["content-range"] || "").split("/").pop()) ||
+                                Number(response.headers["content-length"]) ||
+                                0;
+                        etag = response.headers["etag"];
+                    }
+                }
+                const features = url.replace(/(http|https):\/\/(.+?)\//g, "");
+                const key = yield (0, md5_1.getMd5)(`${features}@@${name}@@${file_size}`);
+                const temp_dir = path_1.default.join(this.temp_path, key);
+                fs_1.default.mkdirSync(temp_dir, { recursive: true });
+                resolve({
+                    file_size,
+                    name,
+                    key,
+                    temp_dir,
+                    etag,
+                    headers,
+                    mine_type,
+                });
+            }
+            catch (error) {
+                reject(error);
+            }
+        }));
         this.getParts().then((parts) => {
             parts.forEach((__, index) => {
-                this.status[index] = "pause";
+                this.status[index] = "wait";
             });
         });
-    }
-    createDir(filePath) {
-        const parts = filePath.split(path_1.default.sep);
-        for (let i = 1; i <= parts.length; i++) {
-            const currentPath = path_1.default.join(...parts.slice(0, i));
-            if (!fs_1.default.existsSync(currentPath) && !path_1.default.extname(currentPath)) {
-                fs_1.default.mkdirSync(currentPath);
-            }
-        }
     }
     setConfig(config, mix = true) {
         this.config = mix
@@ -74,17 +115,7 @@ class Downloader {
         return this;
     }
     getFileInfo() {
-        return __awaiter(this, void 0, void 0, function* () {
-            const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
-            const total = Number(response.headers["content-length"]);
-            const type = response.headers["content-type"];
-            const lastModified = response.headers["last-modified"];
-            const [url] = this.config.url.split("?");
-            const originalName = url.split("/").pop() || "";
-            const name = this.name || originalName;
-            const key = `${originalName}@@${total}`;
-            return { total, type, lastModified, originalName, name, key };
-        });
+        return this.get_file_info_promise;
     }
     getParts() {
         return __awaiter(this, void 0, void 0, function* () {
@@ -93,19 +124,21 @@ class Downloader {
                 this.get_parts_promise = new Promise((resolve) => {
                     const parts = [];
                     if (this.part_size) {
-                        const part_count = Math.ceil(info.total / this.part_size);
+                        const part_count = Math.ceil(info.file_size / this.part_size);
                         for (let i = 0; i < part_count; i++) {
                             const start = i * this.part_size;
-                            const end = Math.min(info.total, (i + 1) * this.part_size);
+                            const end = Math.min(info.file_size, start + this.part_size) - 1;
                             parts.push({
                                 part_count,
                                 part_index: i,
-                                part_name: `${info.name}.part${i + 1}`,
+                                part_name: `${info.name}.part${i}`,
                                 start: start,
-                                end: end === info.total ? end : end - 1,
-                                total: info.total,
-                                name: info.originalName,
-                                part_size: end - start,
+                                end: end,
+                                total: info.file_size,
+                                name: info.name,
+                                part_size: end - start + 1,
+                                temp_dir: info.temp_dir,
+                                temp_path: path_1.default.join(info.temp_dir, `${info.name}.part${i}`),
                             });
                         }
                     }
@@ -113,12 +146,14 @@ class Downloader {
                         parts.push({
                             part_count: 1,
                             part_index: 0,
-                            part_name: `${info.name}.part1`,
+                            part_name: `${info.name}.part0`,
                             start: 0,
-                            end: info.total,
-                            total: info.total,
-                            name: info.originalName,
-                            part_size: info.total,
+                            end: info.file_size,
+                            total: info.file_size,
+                            name: info.name,
+                            part_size: info.file_size,
+                            temp_dir: info.temp_dir,
+                            temp_path: path_1.default.join(info.temp_dir, `${info.name}.part0`),
                         });
                     }
                     resolve(parts);
@@ -131,6 +166,10 @@ class Downloader {
         const events = this.events.get("ON_PROGRESS") || [];
         events.push(fn);
         this.events.set("ON_PROGRESS", events);
+        return () => {
+            const index = events.indexOf(fn);
+            events.splice(index, 1);
+        };
     }
     notifyProgress() {
         return __awaiter(this, void 0, void 0, function* () {
@@ -142,11 +181,15 @@ class Downloader {
             this.progress.forEach((item) => {
                 loaded += item.loaded;
             });
+            if (this.oldLoaded === loaded) {
+                return;
+            }
+            this.oldLoaded = loaded;
             const info = yield this.getFileInfo();
             const params = {
                 loaded,
-                total: info.total,
-                progress: Math.round((loaded / info.total) * 100),
+                total: info.file_size,
+                progress: Math.round((loaded / info.file_size) * 100),
             };
             events.forEach((fn) => {
                 fn(params, this.progress);
@@ -157,199 +200,224 @@ class Downloader {
         const events = this.events.get("ON_STATUS") || [];
         events.push(fn);
         this.events.set("ON_STATUS", events);
-        this.notifyStatus(-1);
+        return () => {
+            const index = events.indexOf(fn);
+            events.splice(index, 1);
+        };
     }
-    notifyStatus(part) {
+    notifyStatus(part, status) {
         const events = this.events.get("ON_STATUS") || [];
-        if (!events.length) {
+        if (status === this.status[part]) {
             return;
         }
+        this.status[part] = status;
         events.forEach((fn) => {
             fn(this.status, part);
         });
     }
-    startPart(part_1) {
-        return __awaiter(this, arguments, void 0, function* (part, data = {}) {
+    /**
+     *
+     * @param part
+     * @param options
+     * @returns
+     */
+    startPart(part, options) {
+        return __awaiter(this, void 0, void 0, function* () {
             const parts = yield this.getParts();
             const part_info = parts[part];
-            if (["done", "pending", "stop"].includes(this.status[part])) {
-                const task = this.tasks[part] || {
-                    promise: Promise.reject(Object.assign({ status: this.status[part] }, part_info)),
-                    abort: () => { },
-                };
-                this.tasks[part] = task;
-                return task.promise;
+            const { useCache = true, preloaded } = options || {};
+            if (this.tasks[part]) {
+                return this.tasks[part].promise;
             }
-            this.status[part] = "pending";
-            const strs = part_info.name.split(".");
-            strs.pop();
-            const dirname = strs.join("_");
-            const dir_path = path_1.default.join(this.dir_path, dirname);
-            const file_path = path_1.default.join(dir_path, part_info.part_name);
-            const isExistFile = fs_1.default.existsSync(file_path);
+            if (["stop"].includes(this.status[part])) {
+                return Promise.reject("当前任务已停止");
+            }
+            const file_info = yield this.getFileInfo();
+            const file_path = path_1.default.join(file_info.temp_dir, part_info.part_name);
             let start = part_info.start;
-            const end = part_info.end;
-            if (isExistFile) {
+            let end = part_info.end;
+            let cache_size = 0;
+            const stream = new stream_1.PassThrough();
+            const done = () => {
+                const progress = {
+                    loaded: part_info.part_size,
+                    total: part_info.part_size,
+                    name: part_info.part_name,
+                    progress: 100,
+                };
+                stream.emit("progress", progress);
+                this.progress[part] = progress;
+                this.notifyStatus(part, end !== part_info.end ? "wait" : "done");
+                this.notifyProgress();
+                this.end();
+            };
+            stream.on("done", done);
+            stream.on("error", () => {
+                this.end();
+            });
+            if (fs_1.default.existsSync(file_path)) {
                 const part_stat = fs_1.default.statSync(file_path);
-                if (part_stat.size >= part_info.part_size) {
-                    const promise = new Promise((resolve, reject) => {
-                        fs_1.default.readFile(file_path, (err, data) => {
-                            if (err) {
-                                reject(err);
-                            }
-                            else {
-                                resolve(data);
-                            }
+                cache_size = part_stat.size;
+            }
+            const run = () => __awaiter(this, void 0, void 0, function* () {
+                var _a;
+                try {
+                    let read;
+                    if (useCache && fs_1.default.existsSync(file_path)) {
+                        start += cache_size;
+                        read = fs_1.default.createReadStream(file_path);
+                        if (cache_size >= part_info.part_size) {
+                            read.on("data", (chunk) => {
+                                stream.write(chunk);
+                            });
+                            read.on("error", (error) => {
+                                stream.destroy(error);
+                            });
+                            read.on("end", () => {
+                                stream.end();
+                                stream.emit("done");
+                            });
+                            return;
+                        }
+                        yield new Promise((resolve, reject) => {
+                            read.on("data", (chunk) => {
+                                stream.write(chunk);
+                            });
+                            read.on("end", resolve);
+                            read.on("error", (error) => {
+                                stream.destroy(error);
+                                reject(error);
+                            });
                         });
+                    }
+                    if (preloaded) {
+                        end = Math.min(part_info.end, start + preloaded - 1);
+                    }
+                    const params = Object.assign(Object.assign({}, this.config), { headers: Object.assign(Object.assign({ "If-Range": (_a = file_info.etag) !== null && _a !== void 0 ? _a : undefined }, this.config.headers), { Range: `bytes=${start}-${end}` }), onDownloadProgress: (value) => {
+                            const loaded = cache_size + value.loaded;
+                            const progress = {
+                                loaded: loaded,
+                                total: part_info.part_size,
+                                name: part_info.part_name,
+                                progress: Math.round((loaded / part_info.part_size) * 100),
+                            };
+                            stream.emit("progress", progress);
+                            this.progress[part] = progress;
+                            this.notifyProgress();
+                        } });
+                    const task = this.request(params);
+                    stream.on("close", () => {
+                        task.abort();
                     });
-                    this.status[part] = "pending";
                     this.tasks[part] = {
-                        promise,
+                        promise: stream,
                         abort: () => {
                             task.abort();
                         },
                     };
-                    this.notifyStatus(part);
-                    promise
-                        .then(() => {
-                        this.status[part] = "done";
-                        this.notifyStatus(part);
-                    })
-                        .catch(() => {
-                        if (this.status[part] !== "stop") {
-                            this.status[part] = "pause";
-                            this.notifyStatus(part);
-                        }
-                    })
-                        .finally(() => {
-                        this.finishing();
-                    });
-                    return promise;
-                }
-                start += part_stat.size + 1;
-            }
-            const writer = fs_1.default.createWriteStream(file_path, { flags: "a" });
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${start}-${end}` }), onDownloadProgress: (value) => {
-                    this.progress[part] = {
-                        loaded: Math.round((value.progress || 0) * part_info.part_size),
-                        total: part_info.part_size,
-                        name: part_info.part_name,
-                        progress: Math.round((value.progress || 0) * 100),
-                    };
-                    this.notifyProgress();
-                } });
-            const task = this.request(params);
-            const promise = new Promise((resolve, reject) => {
-                let data = [];
-                task
-                    .then((response) => {
-                    response.data.pipe(writer);
+                    this.notifyStatus(part, "pending");
+                    const response = yield task;
                     response.data.on("data", (chunk) => {
-                        data.push(chunk);
+                        stream.write(chunk);
                     });
-                    response.data.on("end", () => {
-                        const buffer = Buffer.concat(data);
-                        data = [];
-                        resolve(buffer);
+                    if ((!useCache && cache_size < preloaded) || useCache) {
+                        const writer = fs_1.default.createWriteStream(file_path, useCache
+                            ? { flags: "a" }
+                            : {
+                                start: 0,
+                            });
+                        response.data.pipe(writer);
+                        writer.on("close", () => {
+                            stream.end();
+                            stream.emit("done");
+                        });
+                    }
+                    else {
+                        response.data.on("end", () => {
+                            stream.end();
+                            stream.emit("done");
+                        });
+                    }
+                    response.data.on("close", () => {
+                        this.tasks[part] = null;
                     });
                     response.data.on("error", (error) => {
-                        data = [];
-                        reject(error);
+                        stream.destroy(error);
+                        this.tasks[part] = null;
                     });
-                })
-                    .catch(reject);
-            });
-            this.tasks[part] = {
-                promise,
-                abort: () => {
-                    task.abort();
-                },
-            };
-            this.notifyStatus(part);
-            promise
-                .then(() => {
-                this.status[part] = "done";
-                this.notifyStatus(part);
-            })
-                .catch(() => {
-                if (this.status[part] !== "stop") {
-                    this.status[part] = "pause";
-                    this.notifyStatus(part);
+                    this.config.headers = Object.assign({ "If-Range": response.headers["etag"] || undefined }, this.config.headers);
                 }
-            })
-                .finally(() => {
-                this.finishing();
+                catch (error) {
+                    stream.destroy(error);
+                }
             });
-            return promise;
+            run();
+            return stream;
+        });
+    }
+    waitPartStream(stream) {
+        return new Promise((resolve, reject) => {
+            stream.on("done", resolve);
+            stream.on("error", reject);
+        });
+    }
+    waitPartDone(part) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (["done", "stop"].includes(this.status[part])) {
+                return;
+            }
+            const stream = yield this.startPart(part);
+            return this.waitPartStream(stream);
         });
     }
     /**
-     * part 暂停当前切片任务,所有任务结束时，upload处于等待中
-     * 下载大小小于size时,终止请求
+     * part 暂停当前切片任务,所有任务结束时，finish处于等待中
      */
-    pausePart(part, size = Infinity) {
+    pausePart(part) {
         var _a;
-        if (this.status[part] !== "pending") {
+        if (this.status[part] !== "pending" || !this.tasks[part]) {
             return;
         }
-        if (this.progress[part].loaded < size) {
-            this.status[part] = "pause";
-            (_a = this.tasks[part]) === null || _a === void 0 ? void 0 : _a.abort();
-            this.notifyStatus(part);
-        }
+        this.notifyStatus(part, "wait");
+        (_a = this.tasks[part]) === null || _a === void 0 ? void 0 : _a.abort();
+        this.tasks[part] = null;
     }
     /**
-     * 停止当前任务，所有任务结束时，upload返回结果
+     * 停止当前任务，所有任务结束时，finish返回结果
      */
     stopPart(part) {
         var _a;
-        if (this.status[part] === "done") {
+        if (this.status[part] === "done" || !this.status[part]) {
             return;
         }
-        this.status[part] = "stop";
+        this.notifyStatus(part, "stop");
         (_a = this.tasks[part]) === null || _a === void 0 ? void 0 : _a.abort();
-        this.notifyStatus(part);
-    }
-    /**
-     * 通过part下载,该part将进入完成状态
-     */
-    skipPart(part, data) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const parts = yield this.getParts();
-            this.status[part] = "done";
-            this.tasks[part] = {
-                promise: Promise.resolve(data),
-                abort: () => { },
-            };
-            this.progress[part] = {
-                loaded: parts[part].part_size,
-                total: parts[part].part_size,
-                progress: 100,
-                name: parts[part].part_name,
-            };
-            this.notifyStatus(part);
-            this.notifyProgress();
-            this.finishing();
-            return this.tasks[part].promise;
-        });
+        this.tasks[part] = null;
     }
     onSpeed(fn) {
         const events = this.events.get("ON_SPEED") || [];
         events.push(fn);
         this.events.set("ON_SPEED", events);
         if (!this.speedRef) {
-            this.speedRef = window.setInterval(() => {
+            this.speedRef = setInterval(() => {
                 const events = this.events.get("ON_SPEED") || [];
-                this.finishing().finally(() => {
-                    clearInterval(this.speedRef);
-                    events.forEach((fn) => {
-                        fn(0, Array(parts.length).fill(0));
-                    });
-                });
                 if (!events.length) {
                     return;
                 }
+                const status = this.status;
+                const isPause = status.some((value) => value === "wait");
+                const isPending = status.some((value) => value === "pending");
+                if (status.length &&
+                    status.length === this.tasks.length &&
+                    !isPause &&
+                    !isPending) {
+                    clearInterval(this.speedRef);
+                    this.downloader.callback[0](this.status);
+                }
                 let totalSpeed = 0;
+                let oldSpeed = this.speedsize.length
+                    ? this.speedsize.reduce((a, b) => a + b, 0)
+                    : undefined;
                 let parts = [];
                 this.progress.forEach((item, index) => {
                     const speed = item.loaded - (this.speedsize[index] || 0);
@@ -357,53 +425,64 @@ class Downloader {
                     totalSpeed += speed;
                     this.speedsize[index] = item.loaded;
                 });
+                if (oldSpeed === totalSpeed) {
+                    return;
+                }
                 events.forEach((fn) => {
                     fn(totalSpeed, parts);
                 });
             }, 1000);
         }
+        return () => {
+            clearInterval(this.speedRef);
+            const index = events.indexOf(fn);
+            events.splice(index, 1);
+        };
+    }
+    /**
+     * 等待所有任务结束，返回状态
+     */
+    end() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const parts = yield this.getParts();
+            const status = this.status;
+            const isPause = status.some((value) => value === "wait");
+            const isPending = status.some((value) => value === "pending");
+            if (status.length &&
+                status.length === parts.length &&
+                !isPause &&
+                !isPending) {
+                clearInterval(this.speedRef);
+                this.downloader.callback[0](this.status);
+            }
+            return this.downloader.promise;
+        });
     }
     /**
      * 等待所有任务结束，返回结果
      */
     finishing() {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
-            const status = this.status.filter((value) => value);
-            const isPause = status.some((value) => value === "pause");
-            const isPending = status.some((value) => value === "pending");
-            if (status.length === this.tasks.length && !isPause && !isPending) {
-                const response = yield Promise.allSettled(this.tasks.map((item) => item.promise));
-                const results = [];
-                response.forEach((item) => {
-                    if (item.status === "fulfilled") {
-                        results.push({
-                            status: "done",
-                            data: item.value,
-                            error: null,
-                        });
-                    }
-                    else {
-                        results.push({
-                            status: "stop",
-                            error: item.reason,
-                            data: null,
-                        });
-                    }
+            const status = yield this.end();
+            const tasks = [];
+            for (let i = 0; i < status.length; i++) {
+                const stream = yield this.startPart(i);
+                tasks.push({
+                    stream,
+                    status: status[i],
                 });
-                (_a = this.downloader) === null || _a === void 0 ? void 0 : _a.callback[0](results);
             }
-            return (_b = this.downloader) === null || _b === void 0 ? void 0 : _b.promise;
+            return tasks;
         });
     }
     /**
      * 开始下载
      */
     download() {
-        return __awaiter(this, void 0, void 0, function* () {
+        return __awaiter(this, arguments, void 0, function* (concurrent = 1) {
             const parts = yield this.getParts();
             const promises = parts.map((_, index) => {
-                return () => this.startPart(index);
+                return () => this.waitPartDone(index);
             });
             const limitConcurrency = (promises, limit) => {
                 let index = 0;
@@ -424,71 +503,70 @@ class Downloader {
                 const tasks = Array.from({ length: Math.min(limit, promises.length) }, () => runNext());
                 Promise.all(tasks);
             };
-            limitConcurrency(promises, this.concurrent);
+            limitConcurrency(promises, concurrent);
             return this.finishing();
         });
     }
+    /**
+     *
+     * @param save_path 可为文件夹 也可为具体文件
+     * @returns
+     */
     save(save_path) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (!this.status.every((value) => value === "done")) {
+            if (!this.status.length) {
+                return Promise.reject("未检测到下载，请执行download");
+            }
+            const status = yield this.end();
+            if (!status.every((value) => value === "done")) {
                 return Promise.reject(new Error("文件未下载完成"));
             }
             const file = yield this.getFileInfo();
-            const response = yield this.finishing();
-            const blobs = [];
-            for (const value of response) {
-                if (value.status === "stop") {
-                    return Promise.reject(new Error("文件下载异常"));
+            const tasks = yield this.finishing();
+            let file_path = save_path;
+            let file_name = file.name;
+            if (path_1.default.extname(save_path)) {
+                file_path = path_1.default.dirname(save_path);
+                file_name = path_1.default.basename(save_path);
+            }
+            fs_1.default.mkdirSync(file_path, { recursive: true });
+            const stream = fs_1.default.createWriteStream(path_1.default.join(file_path, file_name));
+            for (const task of tasks) {
+                if (task.status !== "done") {
+                    continue;
                 }
-                blobs.push(value.data);
-            }
-            if (save_path) {
-                return new Promise((resolve, reject) => {
-                    const file_path = path_1.default.extname(save_path)
-                        ? save_path
-                        : path_1.default.join(save_path, file.name);
-                    fs_1.default.writeFile(file_path, Buffer.concat(blobs), (err) => {
-                        if (err) {
-                            reject(false);
-                        }
-                        else {
-                            resolve(true);
-                        }
+                yield new Promise((resolve, reject) => {
+                    task.stream.on("data", (chunk) => {
+                        stream.write(chunk);
+                    });
+                    task.stream.on("error", (error) => {
+                        reject(error);
+                        stream.destroy(error);
+                        stream.emit("error");
+                    });
+                    task.stream.on("end", () => {
+                        resolve(true);
                     });
                 });
             }
-            else {
-                return new Promise((resolve, reject) => {
-                    const file_path = path_1.default.join(this.dir_path, file.name);
-                    fs_1.default.writeFile(file_path, Buffer.concat(blobs), (err) => {
-                        if (err) {
-                            reject(false);
-                        }
-                        else {
-                            resolve(true);
-                        }
-                    });
-                });
-            }
+            stream.end();
+            stream.emit("end");
+            return stream;
         });
     }
     /**
-     * 删除下载的切片
+     * 删除下载的缓存
      */
-    deleteDownloadFile() {
+    deleteDownloadTemp() {
         return __awaiter(this, void 0, void 0, function* () {
             const file = yield this.getFileInfo();
-            const strs = file.name.split(".");
-            strs.pop();
-            const dirname = strs.join("_");
-            const dir_path = path_1.default.join(this.dir_path, dirname);
-            const isExist = fs_1.default.existsSync(dir_path);
+            const isExist = fs_1.default.existsSync(file.temp_dir);
             if (!isExist) {
                 return true;
             }
             this.tasks = [];
             return new Promise((resolve, reject) => {
-                fs_1.default.rm(dir_path, { force: true, recursive: true }, (err) => {
+                fs_1.default.rm(file.temp_dir, { force: true, recursive: true }, (err) => {
                     if (err) {
                         reject(false);
                     }
@@ -497,19 +575,6 @@ class Downloader {
                     }
                 });
             });
-        });
-    }
-    /**
-     * 销毁实例 释放内存,清空下载缓存
-     */
-    destroyed() {
-        return __awaiter(this, void 0, void 0, function* () {
-            this.deleteDownloadFile();
-            this.tasks = [];
-            this.get_parts_promise = undefined;
-            this.downloader = undefined;
-            this.isDestroyed = true;
-            this.events = new Map();
         });
     }
 }

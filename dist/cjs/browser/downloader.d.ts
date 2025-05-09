@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 export interface DownloaderPart {
     start: number;
     end: number;
@@ -11,12 +11,12 @@ export interface DownloaderPart {
 }
 declare class Downloader {
     private get_parts_promise?;
+    private get_file_info_promise?;
     private request;
     private tasks;
-    private name?;
     private part_size?;
     private status;
-    private downloader?;
+    private downloader;
     private config;
     private events;
     private progress;
@@ -33,16 +33,24 @@ declare class Downloader {
          */
         part_size?: number;
         concurrent?: number;
+        /**
+         * 调用一次 缓存结果
+         */
+        fetchFileInfo?: (config: RequestChain.Config) => Promise<{
+            name: string;
+            file_size: number;
+            [x: string]: any;
+        }>;
         request: (config: RequestChain.Config) => RequestChainResponse;
     });
     setConfig(config: Partial<RequestChain.Config>, mix?: boolean): this;
     getFileInfo(): Promise<{
-        total: number;
-        type: any;
-        lastModified: any;
-        originalName: string;
+        [x: string]: any;
         name: string;
+        file_size: number;
         key: string;
+        etag?: string;
+        headers: Record<string, string>;
     }>;
     getParts(): Promise<DownloaderPart[]>;
     onProgress(fn: (file: {
@@ -64,13 +72,13 @@ declare class Downloader {
      * part 暂停当前切片任务,所有任务结束时，upload处于等待中
      * 下载大小小于size时,终止请求
      */
-    pausePart(part: number, size?: number): void;
+    pausePart(part: number, size?: number): Promise<never>;
     /**
      * 停止当前任务，所有任务结束时，upload返回结果
      */
-    stopPart(part: number): void;
+    stopPart(part: number): Promise<never>;
     /**
-     * 通过part上传,该part将进入完成状态
+     * 跳过part上传,该part将进入完成状态
      */
     skipPart(part: number, data: Blob): Promise<Blob>;
     /**
@@ -99,14 +107,14 @@ declare class Downloader {
         status: "stop";
         error: any;
     })[]>;
-    private openDb;
     private setChache;
     private getChache;
     private clearChache;
-    save(): Promise<boolean>;
+    save(name?: string): Promise<never>;
     /**
      * 销毁实例 释放内存,清空indexDb缓存
      */
     destroyed(): Promise<void>;
 }
 export default Downloader;
+//# sourceMappingURL=downloader.d.ts.map

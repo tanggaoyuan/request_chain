@@ -1,4 +1,6 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
+import { IndexDBCache } from "./cache";
+import ContentDisposition from "content-disposition";
 
 export interface DownloaderPart {
   start: number;
@@ -11,8 +13,18 @@ export interface DownloaderPart {
   part_count: number;
 }
 
+const store = new IndexDBCache("downloads");
+
 class Downloader {
   private get_parts_promise?: Promise<Array<DownloaderPart>>;
+  private get_file_info_promise?: Promise<{
+    name: string;
+    file_size: number;
+    key: string;
+    etag?: string;
+    headers: Record<string, string>;
+    [x: string]: any;
+  }>;
 
   private request: (config: RequestChain.Config) => RequestChainResponse<Blob>;
   private tasks: Array<{
@@ -20,10 +32,9 @@ class Downloader {
     abort: () => void;
   }> = [];
 
-  private name?: string;
   private part_size?: number;
   private status: Array<"pending" | "pause" | "done" | "stop"> = [];
-  private downloader?: {
+  private downloader: {
     promise: Promise<
       Array<
         | {
@@ -81,6 +92,14 @@ class Downloader {
      */
     part_size?: number;
     concurrent?: number;
+    /**
+     * 调用一次 缓存结果
+     */
+    fetchFileInfo?: (config: RequestChain.Config) => Promise<{
+      name: string;
+      file_size: number;
+      [x: string]: any;
+    }>;
     request: (config: RequestChain.Config) => RequestChainResponse;
   }) {
     const callback: [any, any] = [null, null];
@@ -94,9 +113,82 @@ class Downloader {
     this.concurrent = options.concurrent || 1;
     this.request = options.request;
     this.config.url = options.url;
-    this.name = options.name;
     this.part_size = options.part_size;
-    this.getFileInfo();
+    let headers = {};
+    this.get_file_info_promise = new Promise(async (resolve, reject) => {
+      try {
+        const [url] = this.config.url.split("?");
+        let name = url.split("/").pop() || "";
+        let file_size = 0;
+        let etag = "";
+        if (options.fetchFileInfo) {
+          const response = await options.fetchFileInfo(this.config);
+          name = response.name;
+          file_size = response.file_size;
+        } else {
+          try {
+            const response = await this.request({
+              ...this.config,
+              method: "HEAD",
+              url: this.config.url,
+              mergeSame: true,
+              cache: "memory",
+            });
+
+            if (response.headers["content-disposition"]) {
+              const info = ContentDisposition.parse(
+                response.headers["content-disposition"]
+              );
+              name = info.parameters.filename;
+            }
+
+            headers = {
+              ...response.headers,
+            };
+
+            file_size = Number(response.headers["content-length"]);
+            etag = response.headers["etag"];
+          } catch (error) {
+            const response = await this.request({
+              ...this.config,
+              method: "GET",
+              url: this.config.url,
+              mergeSame: true,
+              cache: "memory",
+              Range: `bytes=${0}-${1}`,
+            });
+
+            if (response.headers["content-disposition"]) {
+              const info = ContentDisposition.parse(
+                response.headers["content-disposition"]
+              );
+              name = info.parameters.filename;
+            }
+
+            file_size =
+              Number(
+                (response.headers["content-range"] || "").split("/").pop()
+              ) || 0;
+            etag = response.headers["etag"];
+
+            headers = {
+              ...response.headers,
+            };
+          }
+        }
+        const key = `${name}@@${file_size}`;
+        resolve({
+          file_size,
+          name,
+          key,
+          etag,
+          headers,
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+
     this.getParts().then((parts) => {
       parts.forEach((__, index) => {
         this.status[index] = "pause";
@@ -114,43 +206,35 @@ class Downloader {
     return this;
   }
 
-  public async getFileInfo() {
-    const response = await this.request({
-      ...this.config,
-      method: "HEAD",
-      url: this.config.url,
-      mergeSame: true,
-      cache: "memory",
-    });
-
-    const total = Number(response.headers["content-length"]);
-    const type = response.headers["content-type"];
-    const lastModified = response.headers["last-modified"];
-    const [url] = this.config.url.split("?");
-    const originalName = url.split("/").pop() || "";
-    const name = this.name || originalName;
-    const key = `${originalName}@@${total}`;
-    return { total, type, lastModified, originalName, name, key };
+  public getFileInfo() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
+    return this.get_file_info_promise;
   }
 
   public async getParts() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
+
     if (!this.get_parts_promise) {
       const info = await this.getFileInfo();
       this.get_parts_promise = new Promise((resolve) => {
         const parts: Array<DownloaderPart> = [];
         if (this.part_size) {
-          const part_count = Math.ceil(info.total / this.part_size);
+          const part_count = Math.ceil(info.file_size / this.part_size);
           for (let i = 0; i < part_count; i++) {
             const start = i * this.part_size;
-            const end = Math.min(info.total, (i + 1) * this.part_size);
+            const end = Math.min(info.file_size, (i + 1) * this.part_size);
             parts.push({
               part_count,
               part_index: i,
               part_name: `${info.name}.part${i + 1}`,
               start,
-              end: end === info.total ? end : end - 1,
-              total: info.total,
-              name: info.originalName,
+              end: end === info.file_size ? end : end - 1,
+              total: info.file_size,
+              name: info.name,
               part_size: end - start,
             });
           }
@@ -160,10 +244,10 @@ class Downloader {
             part_index: 0,
             part_name: `${info.name}.part1`,
             start: 0,
-            end: info.total,
-            total: info.total,
-            name: info.originalName,
-            part_size: info.total,
+            end: info.file_size,
+            total: info.file_size,
+            name: info.name,
+            part_size: info.file_size,
           });
         }
         resolve(parts);
@@ -200,8 +284,8 @@ class Downloader {
     const info = await this.getFileInfo();
     const params = {
       loaded,
-      total: info.total,
-      progress: Math.round((loaded / info.total) * 100),
+      total: info.file_size,
+      progress: Math.round((loaded / info.file_size) * 100),
     };
     events.forEach((fn) => {
       fn(params, this.progress);
@@ -231,7 +315,11 @@ class Downloader {
   }
 
   public async startPart(part: number, data: Record<string, any> = {}) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
+    const file_info = await this.getFileInfo();
     const part_info = parts[part];
     if (["done", "pending", "stop"].includes(this.status[part])) {
       const task = this.tasks[part] || {
@@ -275,6 +363,7 @@ class Downloader {
       headers: {
         ...this.config.headers,
         Range: `bytes=${part_info.start}-${part_info.end}`,
+        "If-Range": file_info.etag ?? undefined,
       },
       onDownloadProgress: (value: any) => {
         this.progress[part] = {
@@ -318,6 +407,9 @@ class Downloader {
    * 下载大小小于size时,终止请求
    */
   public pausePart(part: number, size = Infinity) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (this.status[part] !== "pending") {
       return;
     }
@@ -332,6 +424,9 @@ class Downloader {
    * 停止当前任务，所有任务结束时，upload返回结果
    */
   public stopPart(part: number) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (this.status[part] === "done") {
       return;
     }
@@ -341,9 +436,12 @@ class Downloader {
   }
 
   /**
-   * 通过part上传,该part将进入完成状态
+   * 跳过part上传,该part将进入完成状态
    */
   public async skipPart(part: number, data: Blob) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     this.status[part] = "done";
     this.tasks[part] = {
@@ -402,6 +500,9 @@ class Downloader {
    * 等待所有任务结束，返回结果
    */
   public async finishing() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const status = this.status.filter((value) => value);
     const isPause = status.some((value) => value === "pause");
     const isPending = status.some((value) => value === "pending");
@@ -432,9 +533,9 @@ class Downloader {
           });
         }
       });
-      this.downloader?.callback[0](results);
+      this.downloader.callback[0](results);
     }
-    return this.downloader?.promise as Promise<
+    return this.downloader.promise as Promise<
       Array<
         | {
             status: "done";
@@ -452,6 +553,9 @@ class Downloader {
    * 开始上传
    */
   public async download() {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     const parts = await this.getParts();
     const promises = parts.map((_, index) => {
       return () => this.startPart(index);
@@ -486,75 +590,32 @@ class Downloader {
     return this.finishing();
   }
 
-  private openDb = () => {
-    return new Promise<IDBDatabase>((resolve, reject) => {
-      const indexedDB = window.indexedDB;
-      if (!indexedDB) {
-        return Promise.reject(new Error("不支持DB"));
-      }
-      const request = indexedDB.open("DOWNLOAD_STORE");
-      request.onsuccess = function (event: any) {
-        resolve(event.target.result);
-      };
-      request.onerror = function (event) {
-        reject(new Error("打开数据库失败"));
-      };
-      request.onupgradeneeded = function (event: any) {
-        const db = event.target.result;
-        db.createObjectStore("downloads", { keyPath: "id" });
-      };
-    });
-  };
-
   private async setChache(part: number, chunk: Blob) {
-    const db = await this.openDb();
     const file = await this.getFileInfo();
     const parts = await this.getParts();
-    return new Promise((resolve, reject) => {
-      const task = db
-        .transaction(["downloads"], "readwrite")
-        .objectStore("downloads")
-        .add({
-          ...parts[part],
-          chunk,
-          id: `${file.key}@@${part}`,
-        });
-      task.onsuccess = resolve;
-      task.onerror = reject;
+    return store.set(`${file.key}@@${part}`, {
+      ...parts[part],
+      chunk,
     });
   }
 
   private async getChache(part: number) {
-    const db = await this.openDb();
     const file = await this.getFileInfo();
-    const transaction = db.transaction(["downloads"]);
-    const objectStore = transaction.objectStore("downloads");
-
-    const request = objectStore.get(`${file.key}@@${part}`);
-
-    return new Promise<DownloaderPart & { chunk: Blob }>((resolve, reject) => {
-      request.onerror = function () {
-        reject(request.error);
-      };
-      request.onsuccess = function () {
-        resolve(request.result || false);
-      };
-    });
+    return store.get(`${file.key}@@${part}`);
   }
 
   private async clearChache() {
-    const db = await this.openDb();
     const file = await this.getFileInfo();
     const parts = await this.getParts();
-    const table = db
-      .transaction(["downloads"], "readwrite")
-      .objectStore("downloads");
-    parts.forEach((_, index) => {
-      table.delete(`${file.key}@@${index}`);
-    });
+    for (let index = 0; index > parts.length; index++) {
+      await store.delete(`${file.key}@@${index}`);
+    }
   }
 
-  public async save(): Promise<boolean> {
+  public async save(name?: string) {
+    if (this.isDestroyed) {
+      return Promise.reject("任务已被销毁");
+    }
     if (!this.status.every((value) => value === "done")) {
       return Promise.reject(new Error("文件未下载完成"));
     }
@@ -570,12 +631,11 @@ class Downloader {
     const url = URL.createObjectURL(new Blob(blobs));
     const a = document.createElement("a");
     a.href = url;
-    a.download = file.name;
+    a.download = name || file.name;
     document.body.append(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    return true;
   }
 
   /**
@@ -585,7 +645,9 @@ class Downloader {
     this.clearChache();
     this.tasks = [];
     this.get_parts_promise = undefined;
-    this.downloader = undefined;
+    this.get_file_info_promise = undefined;
+    this.downloader[1]("任务已被销毁");
+    this.downloader.promise = Promise.reject("任务已被销毁");
     this.isDestroyed = true;
     this.events = new Map();
   }

@@ -1,4 +1,4 @@
-import RequestChain, { RequestChainResponse } from "../core";
+import { RequestChain, RequestChainResponse } from "../core";
 import { getMd5, getMd5Thread } from "./md5";
 
 export interface UploaderParts {

@@ -7,6 +7,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+import { IndexDBCache } from "./cache";
+import ContentDisposition from "content-disposition";
+const store = new IndexDBCache("downloads");
 class Downloader {
     constructor(options) {
         this.tasks = [];
@@ -25,25 +28,6 @@ class Downloader {
          */
         this.speedRef = 0;
         this.speedsize = [];
-        this.openDb = () => {
-            return new Promise((resolve, reject) => {
-                const indexedDB = window.indexedDB;
-                if (!indexedDB) {
-                    return Promise.reject(new Error("不支持DB"));
-                }
-                const request = indexedDB.open("DOWNLOAD_STORE");
-                request.onsuccess = function (event) {
-                    resolve(event.target.result);
-                };
-                request.onerror = function (event) {
-                    reject(new Error("打开数据库失败"));
-                };
-                request.onupgradeneeded = function (event) {
-                    const db = event.target.result;
-                    db.createObjectStore("downloads", { keyPath: "id" });
-                };
-            });
-        };
         const callback = [null, null];
         this.downloader = {
             callback,
@@ -55,9 +39,55 @@ class Downloader {
         this.concurrent = options.concurrent || 1;
         this.request = options.request;
         this.config.url = options.url;
-        this.name = options.name;
         this.part_size = options.part_size;
-        this.getFileInfo();
+        let headers = {};
+        this.get_file_info_promise = new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const [url] = this.config.url.split("?");
+                let name = url.split("/").pop() || "";
+                let file_size = 0;
+                let etag = "";
+                if (options.fetchFileInfo) {
+                    const response = yield options.fetchFileInfo(this.config);
+                    name = response.name;
+                    file_size = response.file_size;
+                }
+                else {
+                    try {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
+                        if (response.headers["content-disposition"]) {
+                            const info = ContentDisposition.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        headers = Object.assign({}, response.headers);
+                        file_size = Number(response.headers["content-length"]);
+                        etag = response.headers["etag"];
+                    }
+                    catch (error) {
+                        const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "GET", url: this.config.url, mergeSame: true, cache: "memory", Range: `bytes=${0}-${1}` }));
+                        if (response.headers["content-disposition"]) {
+                            const info = ContentDisposition.parse(response.headers["content-disposition"]);
+                            name = info.parameters.filename;
+                        }
+                        file_size =
+                            Number((response.headers["content-range"] || "").split("/").pop()) || 0;
+                        etag = response.headers["etag"];
+                        headers = Object.assign({}, response.headers);
+                    }
+                }
+                const key = `${name}@@${file_size}`;
+                resolve({
+                    file_size,
+                    name,
+                    key,
+                    etag,
+                    headers,
+                });
+            }
+            catch (error) {
+                reject(error);
+            }
+        }));
         this.getParts().then((parts) => {
             parts.forEach((__, index) => {
                 this.status[index] = "pause";
@@ -70,37 +100,33 @@ class Downloader {
         return this;
     }
     getFileInfo() {
-        return __awaiter(this, void 0, void 0, function* () {
-            const response = yield this.request(Object.assign(Object.assign({}, this.config), { method: "HEAD", url: this.config.url, mergeSame: true, cache: "memory" }));
-            const total = Number(response.headers["content-length"]);
-            const type = response.headers["content-type"];
-            const lastModified = response.headers["last-modified"];
-            const [url] = this.config.url.split("?");
-            const originalName = url.split("/").pop() || "";
-            const name = this.name || originalName;
-            const key = `${originalName}@@${total}`;
-            return { total, type, lastModified, originalName, name, key };
-        });
+        if (this.isDestroyed) {
+            return Promise.reject("任务已被销毁");
+        }
+        return this.get_file_info_promise;
     }
     getParts() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             if (!this.get_parts_promise) {
                 const info = yield this.getFileInfo();
                 this.get_parts_promise = new Promise((resolve) => {
                     const parts = [];
                     if (this.part_size) {
-                        const part_count = Math.ceil(info.total / this.part_size);
+                        const part_count = Math.ceil(info.file_size / this.part_size);
                         for (let i = 0; i < part_count; i++) {
                             const start = i * this.part_size;
-                            const end = Math.min(info.total, (i + 1) * this.part_size);
+                            const end = Math.min(info.file_size, (i + 1) * this.part_size);
                             parts.push({
                                 part_count,
                                 part_index: i,
                                 part_name: `${info.name}.part${i + 1}`,
                                 start,
-                                end: end === info.total ? end : end - 1,
-                                total: info.total,
-                                name: info.originalName,
+                                end: end === info.file_size ? end : end - 1,
+                                total: info.file_size,
+                                name: info.name,
                                 part_size: end - start,
                             });
                         }
@@ -111,10 +137,10 @@ class Downloader {
                             part_index: 0,
                             part_name: `${info.name}.part1`,
                             start: 0,
-                            end: info.total,
-                            total: info.total,
-                            name: info.originalName,
-                            part_size: info.total,
+                            end: info.file_size,
+                            total: info.file_size,
+                            name: info.name,
+                            part_size: info.file_size,
                         });
                     }
                     resolve(parts);
@@ -141,8 +167,8 @@ class Downloader {
             const info = yield this.getFileInfo();
             const params = {
                 loaded,
-                total: info.total,
-                progress: Math.round((loaded / info.total) * 100),
+                total: info.file_size,
+                progress: Math.round((loaded / info.file_size) * 100),
             };
             events.forEach((fn) => {
                 fn(params, this.progress);
@@ -166,7 +192,12 @@ class Downloader {
     }
     startPart(part_1) {
         return __awaiter(this, arguments, void 0, function* (part, data = {}) {
+            var _a;
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const parts = yield this.getParts();
+            const file_info = yield this.getFileInfo();
             const part_info = parts[part];
             if (["done", "pending", "stop"].includes(this.status[part])) {
                 const task = this.tasks[part] || {
@@ -197,7 +228,7 @@ class Downloader {
                 };
                 return promise;
             }
-            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}` }), onDownloadProgress: (value) => {
+            const params = Object.assign(Object.assign({}, this.config), { params: Object.assign(Object.assign({}, this.config.data), data), headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${part_info.start}-${part_info.end}`, "If-Range": (_a = file_info.etag) !== null && _a !== void 0 ? _a : undefined }), onDownloadProgress: (value) => {
                     this.progress[part] = {
                         loaded: Math.round((value.progress || 0) * part_info.part_size),
                         total: part_info.part_size,
@@ -237,6 +268,9 @@ class Downloader {
      */
     pausePart(part, size = Infinity) {
         var _a;
+        if (this.isDestroyed) {
+            return Promise.reject("任务已被销毁");
+        }
         if (this.status[part] !== "pending") {
             return;
         }
@@ -251,6 +285,9 @@ class Downloader {
      */
     stopPart(part) {
         var _a;
+        if (this.isDestroyed) {
+            return Promise.reject("任务已被销毁");
+        }
         if (this.status[part] === "done") {
             return;
         }
@@ -259,10 +296,13 @@ class Downloader {
         this.notifyStatus(part);
     }
     /**
-     * 通过part上传,该part将进入完成状态
+     * 跳过part上传,该part将进入完成状态
      */
     skipPart(part, data) {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const parts = yield this.getParts();
             this.status[part] = "done";
             this.tasks[part] = {
@@ -316,7 +356,9 @@ class Downloader {
      */
     finishing() {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const status = this.status.filter((value) => value);
             const isPause = status.some((value) => value === "pause");
             const isPending = status.some((value) => value === "pending");
@@ -341,9 +383,9 @@ class Downloader {
                         });
                     }
                 });
-                (_a = this.downloader) === null || _a === void 0 ? void 0 : _a.callback[0](results);
+                this.downloader.callback[0](results);
             }
-            return (_b = this.downloader) === null || _b === void 0 ? void 0 : _b.promise;
+            return this.downloader.promise;
         });
     }
     /**
@@ -351,6 +393,9 @@ class Downloader {
      */
     download() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             const parts = yield this.getParts();
             const promises = parts.map((_, index) => {
                 return () => this.startPart(index);
@@ -380,51 +425,31 @@ class Downloader {
     }
     setChache(part, chunk) {
         return __awaiter(this, void 0, void 0, function* () {
-            const db = yield this.openDb();
             const file = yield this.getFileInfo();
             const parts = yield this.getParts();
-            return new Promise((resolve, reject) => {
-                const task = db
-                    .transaction(["downloads"], "readwrite")
-                    .objectStore("downloads")
-                    .add(Object.assign(Object.assign({}, parts[part]), { chunk, id: `${file.key}@@${part}` }));
-                task.onsuccess = resolve;
-                task.onerror = reject;
-            });
+            return store.set(`${file.key}@@${part}`, Object.assign(Object.assign({}, parts[part]), { chunk }));
         });
     }
     getChache(part) {
         return __awaiter(this, void 0, void 0, function* () {
-            const db = yield this.openDb();
             const file = yield this.getFileInfo();
-            const transaction = db.transaction(["downloads"]);
-            const objectStore = transaction.objectStore("downloads");
-            const request = objectStore.get(`${file.key}@@${part}`);
-            return new Promise((resolve, reject) => {
-                request.onerror = function () {
-                    reject(request.error);
-                };
-                request.onsuccess = function () {
-                    resolve(request.result || false);
-                };
-            });
+            return store.get(`${file.key}@@${part}`);
         });
     }
     clearChache() {
         return __awaiter(this, void 0, void 0, function* () {
-            const db = yield this.openDb();
             const file = yield this.getFileInfo();
             const parts = yield this.getParts();
-            const table = db
-                .transaction(["downloads"], "readwrite")
-                .objectStore("downloads");
-            parts.forEach((_, index) => {
-                table.delete(`${file.key}@@${index}`);
-            });
+            for (let index = 0; index > parts.length; index++) {
+                yield store.delete(`${file.key}@@${index}`);
+            }
         });
     }
-    save() {
+    save(name) {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDestroyed) {
+                return Promise.reject("任务已被销毁");
+            }
             if (!this.status.every((value) => value === "done")) {
                 return Promise.reject(new Error("文件未下载完成"));
             }
@@ -440,12 +465,11 @@ class Downloader {
             const url = URL.createObjectURL(new Blob(blobs));
             const a = document.createElement("a");
             a.href = url;
-            a.download = file.name;
+            a.download = name || file.name;
             document.body.append(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            return true;
         });
     }
     /**
@@ -456,7 +480,9 @@ class Downloader {
             this.clearChache();
             this.tasks = [];
             this.get_parts_promise = undefined;
-            this.downloader = undefined;
+            this.get_file_info_promise = undefined;
+            this.downloader[1]("任务已被销毁");
+            this.downloader.promise = Promise.reject("任务已被销毁");
             this.isDestroyed = true;
             this.events = new Map();
         });
